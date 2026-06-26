@@ -14,15 +14,17 @@ st.markdown("---")
 def get_all_teams():
     try:
         conn = sqlite3.connect('analytics_v6.db')
-        # نفترض أن جدول الفرق اسمه 'teams' وعمود الأسماء 'team_name'
-        # عدل هذه الأسماء إذا كانت تختلف في قاعدة بياناتك
-        query = "SELECT DISTINCT team_name FROM teams ORDER BY team_name ASC"
-        teams = pd.read_sql_query(query, conn)['team_name'].tolist()
+        cursor = conn.cursor()
+        # هذا الاستعلام سيعرض لنا أسماء كل الجداول في القاعدة
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        st.write("الجداول الموجودة في القاعدة هي:", tables) # هذا السطر سيظهر لك أسماء الجداول في الموقع
         conn.close()
-        return teams
-    except Exception as e:
-        st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
         return []
+    except Exception as e:
+        st.error(f"خطأ: {e}")
+        return []
+
 
 # جلب قائمة الفرق
 teams_list = get_all_teams()
