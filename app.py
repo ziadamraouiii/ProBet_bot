@@ -14,16 +14,15 @@ st.markdown("---")
 def get_all_teams():
     try:
         conn = sqlite3.connect('analytics_v6.db')
-        cursor = conn.cursor()
-        # هذا الاستعلام سيعرض لنا أسماء كل الجداول في القاعدة
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
-        st.write("الجداول الموجودة في القاعدة هي:", tables) # هذا السطر سيظهر لك أسماء الجداول في الموقع
+        # جلب أسماء الفرق من عمودي الفريق المضيف والضيف ودمجهما
+        query = "SELECT home_team FROM cached_matches UNION SELECT away_team FROM cached_matches ORDER BY home_team ASC"
+        teams = pd.read_sql_query(query, conn)['home_team'].tolist()
         conn.close()
-        return []
+        return teams
     except Exception as e:
-        st.error(f"خطأ: {e}")
+        st.error(f"خطأ في الوصول للبيانات: {e}")
         return []
+
 
 
 # جلب قائمة الفرق
