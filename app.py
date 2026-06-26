@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 from core import calculate_poisson, get_moving_average_stats
 from data_engine import get_team_data
 
@@ -9,16 +10,33 @@ st.set_page_config(page_title="PENTAGON AI PRO", layout="centered")
 st.title("⚽ PENTAGON AI PRO")
 st.markdown("---")
 
-# إدخال البيانات
+# دالة لجلب قائمة الفرق الفريدة من قاعدة البيانات
+def get_all_teams():
+    try:
+        conn = sqlite3.connect('analytics_v6.db')
+        # نفترض أن جدول الفرق اسمه 'teams' وعمود الأسماء 'team_name'
+        # عدل هذه الأسماء إذا كانت تختلف في قاعدة بياناتك
+        query = "SELECT DISTINCT team_name FROM teams ORDER BY team_name ASC"
+        teams = pd.read_sql_query(query, conn)['team_name'].tolist()
+        conn.close()
+        return teams
+    except Exception as e:
+        st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
+        return []
+
+# جلب قائمة الفرق
+teams_list = get_all_teams()
+
+# إدخال البيانات باستخدام القوائم المنسدلة
 col1, col2 = st.columns(2)
 with col1:
-    h_team = st.text_input("الفريق المضيف (Home)")
+    h_team = st.selectbox("الفريق المضيف (Home)", teams_list)
 with col2:
-    a_team = st.text_input("الفريق الضيف (Away)")
+    a_team = st.selectbox("الفريق الضيف (Away)", teams_list)
 
 if st.button("🚀 تحليل المباراة"):
-    if not h_team or not a_team:
-        st.warning("يرجى إدخال أسماء الفريقين!")
+    if h_team == a_team:
+        st.warning("يرجى اختيار فريقين مختلفين!")
     else:
         try:
             # 1. جلب البيانات الخام من قاعدة البيانات
