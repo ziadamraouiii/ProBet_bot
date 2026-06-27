@@ -18,10 +18,13 @@ MY_BETS = [
 
 # 3. دالة جلب البيانات
 def get_db_data(query, params=()):
-    conn = sqlite3.connect('analytics_v6.db')
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    return df
+    try:
+        conn = sqlite3.connect('analytics_v6.db')
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        return df
+    except:
+        return pd.DataFrame()
 
 # 4. دالة الحساب الرياضي (بويسون)
 def calculate_match_probabilities(home_xg, away_xg):
@@ -37,9 +40,9 @@ def calculate_match_probabilities(home_xg, away_xg):
             if i > 0 and j > 0: btts += prob
     return hw, d, aw, o25, btts
 
-# 5. دالة الاتصال المباشر بـ OpenModel
+# 5. دالة الاتصال المباشر بـ OpenModel (النطاق المحدث .app)
 def get_ai_analysis(content):
-    url = "https://api.openmodel.ai/v1/chat/completions"
+    url = "https://api.openmodel.app/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}",
         "Content-Type": "application/json"
@@ -48,34 +51,39 @@ def get_ai_analysis(content):
         "model": "deepseek-v4-flash",
         "messages": [{"role": "user", "content": content}]
     }
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        return response.json()['choices'][0]['message']['content']
-    else:
-        return f"خطأ في الاتصال: {response.status_code} - {response.text}"
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content']
+        else:
+            return f"خطأ في الاتصال: {response.status_code} - {response.text}"
+    except Exception as e:
+        return f"خطأ برمجي: {str(e)}"
 
-# 6. الواجهة
-leagues = get_db_data("SELECT DISTINCT tournament_name FROM cached_matches")['tournament_name'].tolist()
-selected_league = st.selectbox("🏆 اختر الدوري:", leagues)
-teams = sorted(get_db_data("SELECT DISTINCT home_team FROM cached_matches WHERE tournament_name = ? UNION SELECT DISTINCT away_team FROM cached_matches WHERE tournament_name = ?", (selected_league, selected_league)).iloc[:, 0].tolist())
-home_team = st.selectbox("🏠 المضيف", teams)
-away_team = st.selectbox("✈️ الضيف", teams)
+# 6. الواجهة البرمجية
+try:
+    leagues = get_db_data("SELECT DISTINCT tournament_name FROM cached_matches")['tournament_name'].tolist()
+    selected_league = st.selectbox("🏆 اختر الدوري:", leagues)
+    teams = sorted(get_db_data("SELECT DISTINCT home_team FROM cached_matches WHERE tournament_name = ? UNION SELECT DISTINCT away_team FROM cached_matches WHERE tournament_name = ?", (selected_league, selected_league)).iloc[:, 0].tolist())
+    home_team = st.selectbox("🏠 المضيف", teams)
+    away_team = st.selectbox("✈️ الضيف", teams)
 
-if st.button("🚀 تشغيل محرك التحليل"):
-    query = "SELECT home_team, away_team, home_score, away_score FROM cached_matches WHERE tournament_name = ? AND ((home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?))"
-    match_info = get_db_data(query, (selected_league, home_team, away_team, away_team, home_team))
-    
-    if not match_info.empty:
-        home_xg = match_info[match_info['home_team'] == home_team]['home_score'].mean()
-        away_xg = match_info[match_info['away_team'] == away_team]['away_score'].mean()
+    if st.button("🚀 تشغيل محرك التحليل"):
+        query = "SELECT home_team, away_team, home_score, away_score FROM cached_matches WHERE tournament_name = ? AND ((home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?))"
+        match_info = get_db_data(query, (selected_league, home_team, away_team, away_team, home_team))
         
-        hw, d, aw, o25, btts = calculate_match_probabilities(home_xg, away_xg)
-        probs = {'hw': hw, 'd': d, 'aw': aw, 'o25': o25, 'btts': btts}
-        
-        # استدعاء التحليل
-        analysis_prompt = f"مباراة {home_team} vs {away_team}. نسب بويسون: {probs}. اختر أفضل رهان من: {MY_BETS}"
-        st.write("📊 التحليل الرياضي جاهز، جاري استشارة الذكاء الاصطناعي...")
-        result = get_ai_analysis(analysis_prompt)
-        st.info(result)
-    else:
-        st.warning("⚠️ لا توجد بيانات كافية لهذه المباراة في قاعدة البيانات.")
+        if not match_info.empty:
+            home_xg = match_info[match_info['home_team'] == home_team]['home_score'].mean()
+            away_xg = match_info[match_info['away_team'] == away_team]['away_score'].mean()
+            
+            hw, d, aw, o25, btts = calculate_match_probabilities(home_xg, away_xg)
+            probs = {'hw': hw, 'd': d, 'aw': aw, 'o25': o25, 'btts': btts}
+            
+            analysis_prompt = f"مباراة {home_team} vs {away_team}. نسب بويسون: {probs}. اختر أفضل رهان من: {MY_BETS}"
+            with st.spinner('جاري التحليل بواسطة الذكاء الاصطناعي...'):
+                result = get_ai_analysis(analysis_prompt)
+                st.info(result)
+        else:
+            st.warning("⚠️ لا توجد بيانات كافية لهذه المباراة.")
+except Exception as e:
+    st.error(f"خطأ في الواجهة: {e}")
