@@ -29,10 +29,12 @@ def get_all_teams():
 # 2. دالة جلب بيانات مباراة معينة من قاعدة البيانات
 def get_match_data(home, away):
     conn = sqlite3.connect('analytics_v6.db')
-    query = "SELECT * FROM cached_matches WHERE home_team = ? AND away_team = ?"
+    # استخدام LIKE للبحث بمرونة أكبر (تجاهل حالة الأحرف)
+    query = "SELECT * FROM cached_matches WHERE LOWER(TRIM(home_team)) = LOWER(TRIM(?)) AND LOWER(TRIM(away_team)) = LOWER(TRIM(?))"
     df = pd.read_sql_query(query, conn, params=(home, away))
     conn.close()
     return df
+
 
 # واجهة المستخدم
 teams = get_all_teams()
