@@ -11,11 +11,23 @@ st.markdown("---")
 # 1. دالة جلب قائمة الفرق من قاعدة البيانات
 def get_all_teams():
     try:
-        # أضف هذا الكود بعد st.title
-conn = sqlite3.connect('analytics_v6.db')
-sample_data = pd.read_sql_query("SELECT * FROM cached_matches LIMIT 5", conn)
-conn.close()
-st.write("معاينة سريعة للبيانات في قاعدة البيانات:", sample_data)
+        # لاحظ أن هذه السطور يجب أن تكون تحت try بمسافة لليمين
+        conn = sqlite3.connect('analytics_v6.db')
+        query = """
+        SELECT DISTINCT team FROM (
+            SELECT home_team AS team FROM cached_matches
+            UNION
+            SELECT away_team AS team FROM cached_matches
+        ) WHERE team IS NOT NULL ORDER BY team ASC
+        """
+        teams = pd.read_sql_query(query, conn)['team'].tolist()
+        conn.close()
+        return teams
+    except Exception as e:
+        # وهذه السطور تحت except
+        st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
+        return []
+
 
 
 # 2. دالة جلب بيانات مباراة معينة من قاعدة البيانات
