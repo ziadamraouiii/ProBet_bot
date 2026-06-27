@@ -3,18 +3,21 @@ import pandas as pd
 import sqlite3
 import requests
 
+# 1. إعدادات الصفحة
 st.set_page_config(page_title="PENTAGON AI PRO", page_icon="⚽", layout="centered")
-st.title("⚽ PENTAGON AI PRO - المستشار الذكي")
+st.title("⚽ PENTAGON AI PRO - النظام الاحترافي")
 
+# 2. دالة جلب البيانات
 def get_db_data(query, params=()):
     try:
         conn = sqlite3.connect('analytics_v6.db')
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
         return df
-    except:
+    except Exception as e:
         return pd.DataFrame()
 
+# 3. محرك التحليل الذكي (تم تحديثه ليتناسب مع هيكل الرد الجديد)
 def get_ai_analysis(prompt):
     url = "https://api.openmodel.ai/v1/responses"
     headers = {
@@ -27,42 +30,38 @@ def get_ai_analysis(prompt):
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code == 200:
             data = response.json()
-            # فحص هيكلي متقدم:
-            # نحاول الوصول للمسار بالطريقة التي تظهر في التوثيق
-            try:
-                # المحاولة الأولى: المسار الذي ظهر في التوثيق
-                return data['output'][0]['content'][0]['text']
-            except (KeyError, IndexError):
-                # إذا فشل، نرجع الـ JSON كاملاً لنعرف مكانه الصحيح
-                return f"خطأ في مسار JSON. هيكل الرد هو: {str(data)[:500]}"
+            
+            # محاولة استخراج النص بناءً على الهيكل الذي كشفناه
+            # إذا كان النص داخل 'output' أو 'content' أو مسار فرعي
+            if 'output' in data:
+                return str(data['output'])
+            elif 'content' in data:
+                return str(data['content'])
+            else:
+                return f"الرد نجح لكن المسار غير معروف. هيكل الرد: {str(data)[:200]}"
         else:
             return f"خطأ API ({response.status_code}): {response.text}"
     except Exception as e:
-        return f"خطأ تقني: {str(e)}"
+        return f"خطأ برمجـي: {str(e)}"
 
-# واجهة المستخدم (نفسها كما كانت)
+# 4. واجهة المستخدم
 leagues_df = get_db_data("SELECT DISTINCT tournament_name FROM cached_matches")
 if not leagues_df.empty:
-    leagues = leagues_df['tournament_name'].tolist()
-    selected_league = st.selectbox("🏆 اختر الدوري:", leagues)
+    selected_league = st.selectbox("🏆 اختر الدوري:", leagues_df['tournament_name'].tolist())
     
-    teams_query = "SELECT home_team FROM cached_matches WHERE tournament_name = ? UNION SELECT away_team FROM cached_matches WHERE tournament_name = ?"
-    teams = sorted(get_db_data(teams_query, (selected_league, selected_league))['home_team'].tolist())
-    
+    teams = sorted(get_db_data("SELECT home_team FROM cached_matches WHERE tournament_name = ? UNION SELECT away_team FROM cached_matches WHERE tournament_name = ?", (selected_league, selected_league))['home_team'].tolist())
     home_team = st.selectbox("🏠 المضيف", teams)
     away_team = st.selectbox("✈️ الضيف", teams)
 
-    if st.button("🚀 تشغيل التحليل"):
+    if st.button("🚀 تحليل الرهان الاستراتيجي"):
         data = get_db_data("SELECT home_score, away_score FROM cached_matches WHERE tournament_name = ? AND home_team = ? AND away_team = ?", (selected_league, home_team, away_team))
         
         if not data.empty:
-            home_avg = data['home_score'].mean()
-            away_avg = data['away_score'].mean()
-            prompt = f"حلل مباراة {home_team} و {away_team}. المضيف {home_avg:.2f}، الضيف {away_avg:.2f}. قدم رهان واحد فقط."
+            prompt = f"حلل مباراة {home_team} و {away_team}. قدم رهان واحد دقيق."
             
             with st.spinner('جاري التحليل...'):
                 result = get_ai_analysis(prompt)
                 st.success("✅ تحليل الذكاء الاصطناعي:")
                 st.write(result)
         else:
-            st.warning("⚠️ لا توجد بيانات كافية.")
+            st.warning("⚠️ لا توجد بيانات للمواجهة المختارة.")
