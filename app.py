@@ -1,63 +1,56 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from core import calculate_poisson # تأكد من أن هذه الدالة تستقبل البيانات من DataFrame
 
 # إعداد الصفحة
-st.set_page_config(page_title="PRO BET AI", layout="centered")
-st.title("⚽📊🔐 PRO BET AI")
+st.set_page_config(page_title="PENTAGON AI PRO", layout="centered")
+st.title("⚽ PENTAGON AI PRO")
 st.markdown("---")
 
-# 1. دالة جلب قائمة الفرق من قاعدة البيانات
+# 1. كود التشخيص: للتأكد من شكل البيانات في القاعدة
+try:
+    conn = sqlite3.connect('analytics_v6.db')
+    sample = pd.read_sql_query("SELECT home_team, away_team FROM cached_matches LIMIT 5", conn)
+    conn.close()
+    st.write("🔍 معاينة سريعة للبيانات (تأكد من مطابقة هذه الأسماء لما تختاره):")
+    st.write(sample)
+except:
+    st.write("القاعدة فارغة حالياً.")
+
+# 2. دالة جلب الفرق (مع تنظيف المسافات)
 def get_all_teams():
-    try:
-        # لاحظ أن هذه السطور يجب أن تكون تحت try بمسافة لليمين
-        conn = sqlite3.connect('analytics_v6.db')
-        query = """
-        SELECT DISTINCT team FROM (
-            SELECT home_team AS team FROM cached_matches
-            UNION
-            SELECT away_team AS team FROM cached_matches
-        ) WHERE team IS NOT NULL ORDER BY team ASC
-        """
-        teams = pd.read_sql_query(query, conn)['team'].tolist()
-        conn.close()
-        return teams
-    except Exception as e:
-        # وهذه السطور تحت except
-        st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
-        return []
+    conn = sqlite3.connect('analytics_v6.db')
+    query = "SELECT DISTINCT home_team FROM cached_matches UNION SELECT DISTINCT away_team FROM cached_matches"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    # تنظيف الأسماء من أي مسافات زائدة
+    return sorted([str(team).strip() for team in df.iloc[:, 0].dropna()])
 
-
-
-# 2. دالة جلب بيانات مباراة معينة من قاعدة البيانات
+# 3. دالة البحث المرن (تتجاهل الأحرف الكبيرة/الصغيرة والمسافات)
 def get_match_data(home, away):
     conn = sqlite3.connect('analytics_v6.db')
-    # استخدام LIKE للبحث بمرونة أكبر (تجاهل حالة الأحرف)
-    query = "SELECT * FROM cached_matches WHERE LOWER(TRIM(home_team)) = LOWER(TRIM(?)) AND LOWER(TRIM(away_team)) = LOWER(TRIM(?))"
+    query = """
+    SELECT * FROM cached_matches 
+    WHERE LOWER(TRIM(home_team)) = LOWER(TRIM(?)) 
+    AND LOWER(TRIM(away_team)) = LOWER(TRIM(?))
+    """
     df = pd.read_sql_query(query, conn, params=(home, away))
     conn.close()
     return df
 
-
 # واجهة المستخدم
 teams = get_all_teams()
 if teams:
-    col1, col2 = st.columns(2)
-    home_team = col1.selectbox("الفريق المضيف", teams)
-    away_team = col2.selectbox("الفريق الضيف", teams)
+    home_team = st.selectbox("الفريق المضيف", teams)
+    away_team = st.selectbox("الفريق الضيف", teams)
 
     if st.button("تحليل المباراة"):
         match_info = get_match_data(home_team, away_team)
         
         if not match_info.empty:
-            st.success("تم العثور على بيانات المباراة!")
+            st.success("✅ تم العثور على بيانات!")
             st.dataframe(match_info)
-            
-            # هنا يتم تمرير البيانات لخوارزمية بواسون
-            # prediction = calculate_poisson(home_team, away_team)
-            # st.write(prediction)
         else:
-            st.warning("لا توجد بيانات لهذه المواجهة في قاعدة البيانات.")
+            st.warning("⚠️ لا توجد بيانات لهذه المواجهة. تأكد من تطابق الأسماء في القائمة مع الأسماء في المعاينة أعلاه.")
 else:
-    st.info("جاري تحميل الفرق...")
+    st.info("جاري تحميل الفرق من قاعدة البيانات...")
