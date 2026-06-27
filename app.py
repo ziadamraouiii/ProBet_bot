@@ -5,88 +5,75 @@ import math
 from openai import OpenAI
 import os
 
-# إعدادات الصفحة
-st.set_page_config(page_title="PENTAGON AI PRO", layout="centered")
+# إعدادات الواجهة
+st.set_page_config(page_title="PENTAGON AI PRO", page_icon="⚽", layout="centered")
 st.title("⚽ PENTAGON AI PRO")
 
-# جلب البيانات
+# قائمة الرهانات الاستراتيجية
+MY_BETS = [
+    "فوز الفريق المضيف (1)", "فوز الفريق الضيف (2)", "التعادل (X)",
+    "أكثر من 2.5 أهداف (Over 2.5)", "أقل من 2.5 أهداف (Under 2.5)",
+    "كلا الفريقين يسجل (BTTS - Yes)", "فريق واحد فقط يسجل (BTTS - No)",
+    "فوز المضيف أو تعادل (1X)", "فوز الضيف أو تعادل (2X)", "لا للتعادل (12)"
+]
+
 def get_db_data(query, params=()):
     conn = sqlite3.connect('analytics_v6.db')
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     return df
 
-# محرك بويسون
-def poisson_prob(x, mu):
-    return (math.exp(-mu) * (mu**x)) / math.factorial(x)
-
-# التحليل
-if st.button("🚀 تحليل المباراة"):
-    # 1. جلب البيانات أولاً
-    query = "SELECT * FROM cached_matches WHERE tournament_name = ? AND ((home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?))"
-    match_info = get_db_data(query, (selected_league, home_team, away_team, away_team, home_team))
+def calculate_match_probabilities(home_xg, away_xg):
+    # توزيع بويسون للمحاكاة
+    def p_func(x, mu): return (math.exp(-mu) * (mu**x)) / math.factorial(x)
     
-    # 2. التأكد من وجود بيانات قبل أي شيء
-    if not match_info.empty:
-        st.success("✅ تم العثور على بيانات!")
+    hw, d, aw, o25, btts = 0.0, 0.0, 0.0, 0.0, 0.0
+    for i in range(6):
+        for j in range(6):
+            prob = p_func(i, home_xg) * p_func(j, away_xg)
+            if i > j: hw += prob
+            elif i == j: d += prob
+            else: aw += prob
+            if (i + j) > 2.5: o25 += prob
+            if i > 0 and j > 0: btts += prob
+    return hw, d, aw, o25, btts
+
+# جلب الدوري والفرق
+try:
+    leagues = get_db_data("SELECT DISTINCT tournament_name FROM cached_matches")['tournament_name'].tolist()
+    selected_league = st.selectbox("🏆 اختر الدوري:", leagues)
+    teams = sorted(get_db_data("SELECT DISTINCT home_team FROM cached_matches WHERE tournament_name = ? UNION SELECT DISTINCT away_team FROM cached_matches WHERE tournament_name = ?", (selected_league, selected_league)).iloc[:, 0].tolist())
+    home_team = st.selectbox("🏠 المضيف", teams)
+    away_team = st.selectbox("✈️ الضيف", teams)
+except:
+    st.error("خطأ في تحميل قاعدة البيانات")
+
+if st.button("🚀 تشغيل محرك التحليل"):
+    query = """
+    SELECT home_team, away_team, home_score, away_score 
+    FROM cached_matches 
+    WHERE tournament_name = ? AND 
+    ((home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?))
+    """
+    df = get_db_data(query, (selected_league, home_team, away_team, away_team, home_team))
+    
+    if not df.empty:
+        home_xg = df[df['home_team'] == home_team]['home_score'].mean() if not df[df['home_team'] == home_team].empty else 1.2
+        away_xg = df[df['away_team'] == away_team]['away_score'].mean() if not away_xg == 0 else 1.0
         
-        # حسابات بويسون (بسيطة ومباشرة)
-        stats_summary = match_info.to_string()
+        hw, d, aw, o25, btts = calculate_match_probabilities(home_xg, away_xg)
+        probs = {'hw': hw, 'd': d, 'aw': aw, 'o25': o25, 'btts': btts}
         
-        # 3. الاتصال بالـ API داخل Try/Except
+        st.write(f"نسب فوز المضيف: {hw:.1%}")
+        
         try:
             client = OpenAI(api_key=st.secrets["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
             response = client.chat.completions.create(
                 model="deepseek-chat",
-                messages=[{"role": "user", "content": f"حلل التالي: {stats_summary}"}]
+                messages=[{"role": "user", "content": f"حلل مباراة {home_team} ضد {away_team} بناءً على نسب بويسون {probs} واختر الأفضل من قائمة: {MY_BETS}"}]
             )
-            st.write(response.choices[0].message.content)
+            st.info(response.choices[0].message.content)
         except Exception as e:
             st.error(f"خطأ في الاتصال بالذكاء الاصطناعي: {e}")
     else:
-        st.warning("⚠️ لا توجد بيانات للمباراة.")
-            WHERE tournament_name = ? AND 
-            (home_team IN (?, ?) OR away_team IN (?, ?))
-            """
-            df = get_db_data(query, (selected_league, home_team, away_team, home_team, away_team))
-            
-            if not df.empty:
-                # تحويل الأهداف إلى أرقام
-                df['home_score'] = pd.to_numeric(df['home_score'], errors='coerce').fillna(0)
-                df['away_score'] = pd.to_numeric(df['away_score'], errors='coerce').fillna(0)
-                
-                # حساب متوسط الأهداف (كبديل للـ xG)
-                home_xg = df[df['home_team'] == home_team]['home_score'].mean()
-                if pd.isna(home_xg) or home_xg == 0: home_xg = 1.2 # قيمة افتراضية إذا لم تتوفر بيانات كافية
-                
-                away_xg = df[df['away_team'] == away_team]['away_score'].mean()
-                if pd.isna(away_xg) or away_xg == 0: away_xg = 1.0
-
-                # تشغيل محرك بويسون الرياضي
-                hw, d, aw, o25, btts = calculate_match_probabilities(home_xg, away_xg)
-                probs = {'home_win': hw, 'draw': d, 'away_win': aw, 'over_2_5': o25, 'btts': btts}
-
-                st.success("✅ تمت معالجة البيانات بنجاح!")
-                
-                # عرض الأرقام بشكل احترافي
-                st.markdown("### 📊 التحليل الرياضي (توزيع بويسون)")
-                m1, m2, m3 = st.columns(3)
-                m1.metric(f"فوز {home_team}", f"{hw:.1%}")
-                m2.metric("التعادل", f"{d:.1%}")
-                m3.metric(f"فوز {away_team}", f"{aw:.1%}")
-                
-                m4, m5 = st.columns(2)
-                m4.metric("أكثر من 2.5 أهداف (Over 2.5)", f"{o25:.1%}")
-                m5.metric("كلا الفريقين يسجل (BTTS)", f"{btts:.1%}")
-                
-                st.markdown("---")
-                
-                # تشغيل المحلل الذكي
-                with st.spinner('🤖 DeepSeek يقوم بتحليل الأرقام وصياغة أفضل رهان...'):
-                    ai_recommendation = get_ai_analysis(home_team, away_team, df.head(10).to_string(), probs)
-                    st.markdown("### 💎 القرار النهائي (توصية المحلل الذكي):")
-                    st.info(ai_recommendation)
-            else:
-                st.warning("⚠️ لا توجد بيانات كافية في قاعدة البيانات لحساب التوقعات لهذه الفرق.")
-else:
-    st.info("⏳ جاري انتظار تحميل قاعدة البيانات من GitHub...")
+        st.warning("لا توجد بيانات لهذه المباراة")
