@@ -12,8 +12,11 @@ headers = {
 # 1. جلب المباريات
 def get_matches(status="live"):
     url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/{status}"
-    response = requests.get(url, headers=headers)
-    return response.json() if response.status_code == 200 else []
+    try:
+        response = requests.get(url, headers=headers)
+        return response.json() if response.status_code == 200 else []
+    except:
+        return []
 
 # 2. جلب الإحصائيات
 def get_match_stats(match_id):
@@ -21,37 +24,44 @@ def get_match_stats(match_id):
     response = requests.get(url, headers=headers)
     return response.json() if response.status_code == 200 else {}
 
-# 3. محرك التحليل الذكي
+# 3. التحليل
 def analyze_betting_opportunities(stats_data):
     url = "https://api.openmodel.ai/v1/responses"
     headers_ai = {"Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}", "Content-Type": "application/json"}
-    prompt = f"حلل البيانات التالية: {str(stats_data)}. اقترح رهانين أو ثلاثة آمنة (Odds > 1.5) مع التبرير الإحصائي."
+    prompt = f"حلل البيانات التالية بدقة: {str(stats_data)}. اقترح رهانين أو ثلاثة آمنة (Odds > 1.5) مع تبرير إحصائي لكل رهان."
     response = requests.post(url, headers=headers_ai, json={"model": "gpt-5.5", "input": prompt})
     return response.json()['output'][0]['content'][0]['text'] if response.status_code == 200 else "خطأ في التحليل"
 
-# 4. الواجهة (مع معالجة المتغير المفقود)
+# 4. الواجهة (هنا كان الخلل)
 tab1, tab2 = st.tabs(["🔴 مباريات مباشرة", "🗓️ مباريات قادمة"])
-selected_match_id = None # تعريف مبدئي
+
+# دالة مساعدة لعرض القوائم
+def display_matches(status):
+    matches = get_matches(status)
+    if not matches:
+        st.write("لا توجد مباريات حالياً.")
+        return None
+    
+    match_list = [m['home']['name'] + " vs " + m['away']['name'] for m in matches]
+    choice = st.selectbox(f"اختر مباراة ({status}):", match_list, key=f"sel_{status}")
+    
+    if st.button(f"🚀 تحليل {status}", key=f"btn_{status}"):
+        idx = match_list.index(choice)
+        return matches[idx]['id']
+    return None
 
 with tab1:
-    live = get_matches("live")
-    if live:
-        choice = st.selectbox("اختر مباراة حية:", [m['home']['name'] + " vs " + m['away']['name'] for m in live], key="live_sel")
-        if st.button("تحليل المباشر"):
-            selected_match_id = live[[m['home']['name'] + " vs " + m['away']['name'] for m in live].index(choice)]['id']
+    selected_id = display_matches("live")
 
 with tab2:
-    fixtures = get_matches("fixtures")
-    if fixtures:
-        choice_fix = st.selectbox("اختر مباراة قادمة:", [m['home']['name'] + " vs " + m['away']['name'] for m in fixtures], key="fix_sel")
-        if st.button("تحليل القادمة"):
-            selected_match_id = fixtures[[m['home']['name'] + " vs " + m['away']['name'] for m in fixtures].index(choice_fix)]['id']
+    if not selected_id: # إذا لم يختر من live
+        selected_id = display_matches("fixtures")
 
-# التحليل التنفيذي
-if selected_match_id:
+# تنفيذ التحليل النهائي
+if selected_id:
     with st.spinner('جاري التحليل...'):
-        stats = get_match_stats(selected_match_id)
+        stats = get_match_stats(selected_id)
         if stats:
             st.write(analyze_betting_opportunities(stats))
         else:
-            st.warning("لم يتم العثور على إحصائيات لهذه المباراة.")
+            st.warning("تعذر جلب إحصائيات هذه المباراة.")
