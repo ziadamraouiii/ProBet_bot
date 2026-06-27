@@ -1,0 +1,25 @@
+name: Update Database
+on:
+  schedule:
+    - cron: '0 0 * * *' # يعمل يومياً في منتصف الليل
+  workflow_dispatch: # يتيح لك تشغيله يدوياً من GitHub
+
+jobs:
+  update-db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with: {python-version: '3.9'}
+      - name: Install dependencies
+        run: pip install pandas requests
+      - name: Run script
+        run: python update_script.py # هذا ملف ستنشئه لاحقاً يقوم بسحب البيانات
+      - name: Commit changes
+        run: |
+          git config --global user.name 'GitHub Action'
+          git add analytics_v6.db
+          git commit -m "Update database automatically"
+          git push
+
