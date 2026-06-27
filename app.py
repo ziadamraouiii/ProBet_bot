@@ -1,78 +1,51 @@
 import streamlit as st
 import requests
 
-st.set_page_config(page_title="PENTAGON AI PRO - النظام الفضاح", layout="wide")
-st.title("⚽ PENTAGON AI PRO - أداة التشخيص الشاملة")
+st.set_page_config(page_title="PENTAGON AI PRO", layout="wide")
+st.title("⚽ PENTAGON AI PRO - النظام المتكامل")
 
+# إعدادات الاتصال الخاصة بـ apifootball3
 HEADERS = {
-    "x-rapidapi-key": st.secrets["RAPIDAPI_KEY"],
-    "x-rapidapi-host": "flashscore4.p.rapidapi.com"
+    "x-rapidapi-key": "c1f2624c03mshfd0d4445263443dp1964a4jsna5852c4b9947",
+    "x-rapidapi-host": "apifootball3.p.rapidapi.com"
 }
 
-# 1. الكود الفضاح (تشخيص الاتصال)
-def get_upcoming_matches_debug():
-    url = "https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/fixtures"
-    params = {"sport_id": "1"}
-    
-    with st.expander("🔍 كاشف الاتصال (اضغط هنا للمشاهدة)"):
-        response = requests.get(url, headers=HEADERS, params=params)
-        st.write(f"الحالة (Status Code): {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            st.write("البيانات المستلمة (Raw Data):")
-            st.json(data[:2])  # يعرض أول سجلين فقط
-            return data
-        else:
-            st.error(f"خطأ في الاتصال: {response.text}")
-            return []
-
-# 2. منطق التحليل
-def get_match_stats(match_id):
-    url = "https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/stats"
-    params = {"match_id": match_id}
+# 1. دالة جلب الدول (للتأكد من الاتصال)
+@st.cache_data(ttl=3600)
+def get_countries():
+    url = "https://apifootball3.p.rapidapi.com/"
+    params = {"action": "get_countries"}
     response = requests.get(url, headers=HEADERS, params=params)
-    return response.json() if response.status_code == 200 else None
+    return response.json() if response.status_code == 200 else []
 
-def analyze_with_ai(stats_data):
-    url = "https://api.openmodel.ai/v1/responses"
-    headers_ai = {"Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}", "Content-Type": "application/json"}
-    
-    payload = {
-        "model": "gpt-5.5", 
-        "input": f"حلل الإحصائيات: {str(stats_data)}. اعطني 3 رهانات آمنة مع التبرير."
-    }
-    
-    response = requests.post(url, headers=headers_ai, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return data['output'][0]['content'][0]['text'] if 'output' in data else "لا توجد استجابة."
-    return "خطأ في الاتصال بالـ AI."
+# 2. دالة جلب المباريات (معدلة حسب action الخاص بـ apifootball3)
+def get_matches():
+    url = "https://apifootball3.p.rapidapi.com/"
+    # ملاحظة: قم بتغيير 'get_fixtures' بناءً على توثيق الـ API الخاص بك
+    params = {"action": "get_fixtures", "from": "2026-06-27", "to": "2026-06-30"}
+    response = requests.get(url, headers=HEADERS, params=params)
+    return response.json() if response.status_code == 200 else []
 
-# --- التشغيل ---
-data = get_upcoming_matches_debug()
+# --- الواجهة ---
+if st.button("اختبار الاتصال بالـ API"):
+    countries = get_countries()
+    st.write(f"تم الاتصال بنجاح! عدد الدول المتاحة: {len(countries)}")
+
+matches = get_matches()
 matches_map = {}
 
-if data:
-    for tournament in data:
-        for match in tournament.get('matches', []):
-            home = match.get('home', {}).get('name', 'فريق غير معروف')
-            away = match.get('away', {}).get('name', 'فريق غير معروف')
-            m_id = match.get('match_id')
-            
-            name = f"{home} vs {away}"
-            matches_map[name] = m_id
+if matches:
+    for match in matches:
+        home = match.get('match_home_team_name', 'مجهول')
+        away = match.get('match_away_team_name', 'مجهول')
+        m_id = match.get('match_id')
+        name = f"{home} vs {away}"
+        matches_map[name] = m_id
 
-    choice = st.selectbox("اختر المباراة:", list(matches_map.keys()))
-
-    if st.button("بدء التحليل الاحترافي"):
-        m_id = matches_map[choice]
-        stats = get_match_stats(m_id)
-        if stats:
-            report = analyze_with_ai(stats)
-            st.success("🎯 تحليل الذكاء الاصطناعي:")
-            st.write(report)
-        else:
-            st.error("تعذر جلب الإحصائيات لهذه المباراة المحددة.")
+    choice = st.selectbox("اختر مباراة:", list(matches_map.keys()))
+    
+    if st.button("تحليل"):
+        st.success(f"المباراة المختارة: {choice} (ID: {matches_map[choice]})")
+        st.write("الآن النظام جاهز لإرسال هذه البيانات للذكاء الاصطناعي.")
 else:
-    st.warning("لم يتم استلام أي بيانات من الـ API حالياً. (تأكد من حالة الاتصال في الكاشف أعلاه).")
+    st.warning("جاري جلب المباريات أو أن الـ API لا يحتوي على مباريات في هذا التاريخ.")
