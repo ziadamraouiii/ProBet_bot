@@ -67,9 +67,10 @@ if st.button("🚀 تشغيل محرك التحليل"):
         # الاتصال بالذكاء الاصطناعي (محدث لـ OpenModel)
         try:
             client = OpenAI(
-                api_key=st.secrets["DEEPSEEK_API_KEY"], 
-                base_url="https://api.openmodel.ai/v1"
-            )
+    api_key=st.secrets["DEEPSEEK_API_KEY"], 
+    base_url="https://api.openmodel.ai/v1/"  # تأكد من إضافة شرطة مائلة / في النهاية
+)
+
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[{"role": "user", "content": f"مباراة {home_team} vs {away_team}. نسب بويسون: {probs}. اختر أفضل رهان من: {MY_BETS}"}]
