@@ -20,12 +20,11 @@ matches_options = []
 matches_map = {}
 
 # التعديل هنا: إضافة حماية للبيانات
+# استبدل حلقة for السابقة بهذا الكود لنعرف أين تكمن الأسماء
 if data:
-    for tournament in data:
-        for match in tournament.get('matches', []):
-            # نستخدم .get() لتجنب الـ KeyError إذا كان 'home' أو 'away' مفقوداً
-            home = match.get('home', {}).get('name', 'Unknown')
-            away = match.get('away', {}).get('name', 'Unknown')
+    st.write("هيكل أول مباراة وصلتنا (للتشخيص):")
+    st.write(data[0].get('matches', [])[0]) # يعرض لنا بنية البيانات لنعرف كيف نستخرج منها الأسماء
+
             
             # نتجاهل المباريات التي لا تحتوي على أسماء فرق
             if home != 'Unknown' and away != 'Unknown':
