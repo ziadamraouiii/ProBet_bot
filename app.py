@@ -1,27 +1,38 @@
 import streamlit as st
 import requests
 
-st.title("⚽ PENTAGON AI PRO - النظام المصحح")
+st.title("⚽ PENTAGON AI PRO - النظام التشغيلي")
 
-API_KEY = st.secrets["RAPIDAPI_KEY"]
-# أضفت sport_id=1 (لكرة القدم)
 HEADERS = {
-    "x-rapidapi-key": API_KEY, 
+    "x-rapidapi-key": st.secrets["RAPIDAPI_KEY"],
     "x-rapidapi-host": "flashscore4.p.rapidapi.com"
 }
 
-if st.button("تحليل المباريات (بإضافة sport_id)"):
-    # قمت بإضافة sport_id=1 ليتجاوز خطأ الـ 400
+# دالة جلب المباريات الحية
+def get_live_matches():
     url = "https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/live"
-    params = {"sport_id": "1"} 
-    
-    try:
-        response = requests.get(url, headers=HEADERS, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            st.success("تم الاتصال بنجاح!")
-            st.json(data)
-        else:
-            st.error(f"خطأ {response.status_code}: {response.text}")
-    except Exception as e:
-        st.error(f"فشل: {e}")
+    params = {"sport_id": "1"}
+    response = requests.get(url, headers=HEADERS, params=params)
+    return response.json() if response.status_code == 200 else []
+
+# جلب البيانات
+data = get_live_matches()
+
+# استخراج المباريات من الهيكل المعقد الذي ظهر في الصورة
+matches_options = []
+matches_map = {}
+
+for tournament in data:
+    for match in tournament.get('matches', []):
+        name = f"{match['home']['name']} vs {match['away']['name']}"
+        matches_options.append(name)
+        matches_map[name] = match['match_id']
+
+# واجهة المستخدم
+choice = st.selectbox("اختر مباراة لتحليلها:", matches_options)
+
+if st.button("تحليل المباراة"):
+    match_id = matches_map[choice]
+    st.write(f"المُعرّف المختار: {match_id}")
+    # هنا سأقوم لاحقاً بإضافة استدعاء Get Match Stats باستخدام هذا الـ ID
+    st.success("جاهز للتحليل! (الخطوة التالية: ربط إحصائيات المباراة بالذكاء الاصطناعي)")
