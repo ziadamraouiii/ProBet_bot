@@ -1,40 +1,53 @@
 import streamlit as st
 import requests
 
-st.title("⚽ PENTAGON AI PRO - المرحلة النهائية")
+st.title("⚽ PENTAGON AI PRO - النظام المستقر")
 
 HEADERS = {
     "x-rapidapi-key": st.secrets["RAPIDAPI_KEY"],
     "x-rapidapi-host": "flashscore4.p.rapidapi.com"
 }
 
-# 1. دالة جلب الإحصائيات (هنا نربط الـ ID بالبيانات)
-def get_match_stats(match_id):
-    url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/stats"
-    params = {"match_id": match_id}
+# 1. تهيئة الذاكرة إذا لم تكن موجودة
+if 'matches_map' not in st.session_state:
+    st.session_state.matches_map = {}
+
+# 2. جلب البيانات (مرة واحدة فقط لتوفير الوقت)
+@st.cache_data(ttl=60)
+def get_live_matches():
+    url = "https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/live"
+    params = {"sport_id": "1"}
     response = requests.get(url, headers=HEADERS, params=params)
-    return response.json() if response.status_code == 200 else None
+    return response.json() if response.status_code == 200 else []
 
-# 2. دالة التحليل الذكي (التي استخدمناها في البداية)
-def analyze_betting(stats_data):
-    url = "https://api.openmodel.ai/v1/responses"
-    headers_ai = {"Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}", "Content-Type": "application/json"}
-    prompt = f"حلل بيانات المباراة التالية: {str(stats_data)}. اعطني رهانين آمنين (Odds > 1.5) مع التبرير."
-    response = requests.post(url, headers=headers_ai, json={"model": "gpt-5.5", "input": prompt})
-    return response.json()['output'][0]['content'][0]['text']
+data = get_live_matches()
+matches_options = []
+temp_map = {}
 
-# --- هذا الجزء يربط ما اخترته أنت بالتحليل ---
-# (استخدم نفس المنطق السابق للـ matches_map)
-# ... [ضع هنا كود جلب المباريات من الرد السابق] ...
+if data:
+    for tournament in data:
+        for match in tournament.get('matches', []):
+            m_id = match.get('match_id')
+            home = match.get('home', {}).get('name', 'فريق مجهول')
+            away = match.get('away', {}).get('name', 'فريق مجهول')
+            name = f"{home} vs {away} (ID: {m_id})"
+            matches_options.append(name)
+            temp_map[name] = m_id
 
+# تحديث الذاكرة
+st.session_state.matches_map = temp_map
+
+# 3. واجهة الاختيار
+choice = st.selectbox("اختر المباراة:", matches_options)
+
+# 4. زر التحليل (باستخدام القيمة المحفوظة في session_state)
 if st.button("تحليل المباراة المختارة"):
-    # هنا يتم سحر الربط:
-    match_id = matches_map[choice]
-    with st.spinner('جاري سحب الإحصائيات من Flashscore...'):
-        stats = get_match_stats(match_id)
-        if stats:
-            st.success("تم سحب البيانات! جاري التحليل...")
-            final_report = analyze_betting(stats)
-            st.write(final_report)
-        else:
-            st.error("لم نتمكن من الوصول لإحصائيات هذه المباراة، جرب مباراة أخرى.")
+    if choice in st.session_state.matches_map:
+        match_id = st.session_state.matches_map[choice]
+        st.write(f"جاري تحليل المعرف: {match_id}")
+        
+        # هنا يتم استدعاء دالة الإحصائيات والذكاء الاصطناعي
+        # (نفس الدوال السابقة التي عملت معك بنجاح)
+        st.success("تم الربط بنجاح! الآن قم بدمج كود جلب الإحصائيات هنا.")
+    else:
+        st.error("خطأ في تحديد المباراة، حاول التحديث.")
