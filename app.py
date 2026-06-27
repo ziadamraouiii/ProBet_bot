@@ -68,8 +68,9 @@ if st.button("🚀 تشغيل محرك التحليل"):
         try:
             client = OpenAI(
     api_key=st.secrets["DEEPSEEK_API_KEY"], 
-    base_url="https://api.openmodel.ai/v1/"  # تأكد من إضافة شرطة مائلة / في النهاية
+    base_url="https://api.openmodel.ai/" 
 )
+
 
             response = client.chat.completions.create(
                 model="deepseek-chat",
