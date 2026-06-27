@@ -1,75 +1,53 @@
 import streamlit as st
-import pandas as pd
-import sqlite3
 import requests
 
-# 1. إعدادات الصفحة
-st.set_page_config(page_title="PENTAGON AI PRO", page_icon="⚽", layout="centered")
-st.title("⚽ PENTAGON AI PRO - النظام الشامل")
+st.set_page_config(page_title="PENTAGON AI PRO", page_icon="⚽", layout="wide")
+st.title("⚽ PENTAGON AI PRO - النظام الهجين")
 
-# 2. دالة جلب البيانات
-def get_db_data(query, params=()):
-    try:
-        conn = sqlite3.connect('analytics_v6.db')
-        df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
-        return df
-    except Exception as e:
-        st.error(f"خطأ في القاعدة: {e}")
-        return pd.DataFrame()
+# 1. جلب البيانات من الـ API الذي قدمته
+def get_match_data(match_id):
+    url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/point-by-point"
+    querystring = {"match_id": match_id}
+    headers = {
+        "x-rapidapi-key": "c1f2624c03mshfd0d4445263443dp1964a4jsna5852c4b9947",
+        "x-rapidapi-host": "flashscore4.p.rapidapi.com"
+    }
+    response = requests.get(url, headers=headers, params=querystring)
+    return response.json() if response.status_code == 200 else None
 
-# 3. محرك التحليل الذكي
-def get_ai_analysis(prompt):
+# 2. تحليل الذكاء الاصطناعي (النموذج الهجين)
+def get_ai_analysis(match_data):
     url = "https://api.openmodel.ai/v1/responses"
     headers = {
         "Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}",
         "Content-Type": "application/json"
     }
+    
+    # التعليمات الهجينة (Poisson + AI Context)
+    prompt = f"""
+    أنت خبير رهانات رياضية. حلل بيانات المباراة: {str(match_data)[:2000]}.
+    مهمتك:
+    1. قم بتطبيق منطق 'توزيع بويسون' (Poisson) لتقدير احتمالات الأهداف بناءً على النقاط المسجلة.
+    2. ادمج ذلك مع الأداء اللحظي (Point by point).
+    3. أعطني نتيجة واحدة (1X2 أو Over/Under) مع نسبة ثقة.
+    """
+    
     payload = {"model": "gpt-5.5", "input": prompt}
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            data = response.json()
-            if 'output' in data: return str(data['output'])
-            if 'content' in data: return str(data['content'])
-            return str(data)
-        return f"خطأ API ({response.status_code})"
-    except Exception as e:
-        return f"خطأ: {str(e)}"
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        data = response.json()
+        return str(data.get('output', data.get('content', '')))
+    return "خطأ في الاتصال"
 
-# 4. الواجهة والمنطق
-leagues = get_db_data("SELECT DISTINCT tournament_name FROM cached_matches")
-if not leagues.empty:
-    selected_league = st.selectbox("🏆 اختر الدوري:", leagues['tournament_name'].tolist())
-    
-    teams = sorted(get_db_data("SELECT home_team FROM cached_matches WHERE tournament_name = ? UNION SELECT away_team FROM cached_matches WHERE tournament_name = ?", (selected_league, selected_league))['home_team'].tolist())
-    home_team = st.selectbox("🏠 المضيف", teams)
-    away_team = st.selectbox("✈️ الضيف", teams)
+# 3. واجهة الاستخدام
+match_id = st.text_input("📍 أدخل معرف المباراة (Match ID):", value="xp0yZYPr")
 
-    if st.button("🚀 تشغيل التحليل الشامل"):
-        # استعلام مرن يبحث عن الفريقين بغض النظر عن كونهما مضيف أو ضيف
-        query = """
-            SELECT home_score, away_score FROM cached_matches 
-            WHERE tournament_name = ? AND (
-                (home_team = ? AND away_team = ?) OR (home_team = ? AND away_team = ?)
-            )
-        """
-        data = get_db_data(query, (selected_league, home_team, away_team, away_team, home_team))
-        
-        if not data.empty:
-            home_avg = data['home_score'].mean()
-            away_avg = data['away_score'].mean()
-            
-            prompt = f"مباراة {home_team} ضد {away_team}. المضيف سجل {home_avg:.2f} والضيف سجل {away_avg:.2f}. قدم رهان واحد دقيق."
-            
-            with st.spinner('جاري التحليل...'):
-                result = get_ai_analysis(prompt)
-                st.success("✅ النتيجة:")
-                st.write(result)
+if st.button("🚀 بدء التحليل الهجين"):
+    with st.spinner('جاري معالجة البيانات وبناء النموذج...'):
+        data = get_match_data(match_id)
+        if data:
+            analysis = get_ai_analysis(data)
+            st.success("✅ التحليل الاستراتيجي:")
+            st.write(analysis)
         else:
-            st.warning("⚠️ لا توجد بيانات للمواجهة. تأكد من تطابق الأسماء:")
-            st.write("إليك قائمة الفرق المتاحة في هذا الدوري للتحقق من الأسماء:")
-            st.dataframe(pd.DataFrame(teams, columns=["الفرق المتاحة"]))
-else:
-    st.error("قاعدة البيانات فارغة.")
+            st.error("⚠️ فشل جلب البيانات. تأكد من الـ Match ID.")
