@@ -1,51 +1,42 @@
 import streamlit as st
-import requests
 
-st.set_page_config(page_title="PENTAGON AI PRO", layout="wide")
-st.title("⚽ PENTAGON AI PRO - النظام المتكامل")
-
-# إعدادات الاتصال الخاصة بـ apifootball3
-HEADERS = {
-    "x-rapidapi-key": "c1f2624c03mshfd0d4445263443dp1964a4jsna5852c4b9947",
-    "x-rapidapi-host": "apifootball3.p.rapidapi.com"
-}
-
-# 1. دالة جلب الدول (للتأكد من الاتصال)
-@st.cache_data(ttl=3600)
-def get_countries():
-    url = "https://apifootball3.p.rapidapi.com/"
-    params = {"action": "get_countries"}
-    response = requests.get(url, headers=HEADERS, params=params)
-    return response.json() if response.status_code == 200 else []
-
-# 2. دالة جلب المباريات (معدلة حسب action الخاص بـ apifootball3)
-def get_matches():
-    url = "https://apifootball3.p.rapidapi.com/"
-    # ملاحظة: قم بتغيير 'get_fixtures' بناءً على توثيق الـ API الخاص بك
-    params = {"action": "get_fixtures", "from": "2026-06-27", "to": "2026-06-30"}
-    response = requests.get(url, headers=HEADERS, params=params)
-    return response.json() if response.status_code == 200 else []
-
-# --- الواجهة ---
-if st.button("اختبار الاتصال بالـ API"):
-    countries = get_countries()
-    st.write(f"تم الاتصال بنجاح! عدد الدول المتاحة: {len(countries)}")
-
-matches = get_matches()
-matches_map = {}
-
-if matches:
-    for match in matches:
-        home = match.get('match_home_team_name', 'مجهول')
-        away = match.get('match_away_team_name', 'مجهول')
-        m_id = match.get('match_id')
-        name = f"{home} vs {away}"
-        matches_map[name] = m_id
-
-    choice = st.selectbox("اختر مباراة:", list(matches_map.keys()))
+def calculate_stats_engine(home_wins, home_draws, home_losses, away_wins, away_draws, away_losses):
+    # معادلة حساب القوة (Points / Total Games)
+    home_score = (home_wins * 3 + home_draws * 1) / 5
+    away_score = (away_wins * 3 + away_draws * 1) / 5
     
-    if st.button("تحليل"):
-        st.success(f"المباراة المختارة: {choice} (ID: {matches_map[choice]})")
-        st.write("الآن النظام جاهز لإرسال هذه البيانات للذكاء الاصطناعي.")
-else:
-    st.warning("جاري جلب المباريات أو أن الـ API لا يحتوي على مباريات في هذا التاريخ.")
+    total = home_score + away_score
+    
+    # تحويل القوة إلى نسب مئوية (كما في الصورة)
+    home_prob = round((home_score / total) * 100)
+    away_prob = round((away_score / total) * 100)
+    draw_prob = 100 - (home_prob + away_prob)
+    
+    return home_prob, away_prob, draw_prob
+
+st.title("📊 محرك التوقعات الرياضية (النسخة الإحصائية)")
+
+# مدخلات يدوية (يمكننا ربطها لاحقاً بالسحب المباشر)
+home_name = st.text_input("اسم فريق الأرض:", "Carlos Mannucci")
+h_w = st.number_input("فوز الأرض:", 0, 5, 2)
+h_d = st.number_input("تعادل الأرض:", 0, 5, 1)
+h_l = st.number_input("خسارة الأرض:", 0, 5, 2)
+
+away_name = st.text_input("اسم فريق الضيف:", "Llacuabamba")
+a_w = st.number_input("فوز الضيف:", 0, 5, 1)
+a_d = st.number_input("تعادل الضيف:", 0, 5, 1)
+a_l = st.number_input("خسارة الضيف:", 0, 5, 3)
+
+if st.button("احسب الاحتمالات"):
+    h_p, a_p, d_p = calculate_stats_engine(h_w, h_d, h_l, a_w, a_d, a_l)
+    
+    # عرض النتائج كأشرطة بيانية (مثل الصورة)
+    st.write(f"### {home_name} vs {away_name}")
+    st.write(f"فوز {home_name}: {h_p}%")
+    st.progress(h_p / 100)
+    
+    st.write(f"تعادل: {d_p}%")
+    st.progress(d_p / 100)
+    
+    st.write(f"فوز {away_name}: {a_p}%")
+    st.progress(a_p / 100)
