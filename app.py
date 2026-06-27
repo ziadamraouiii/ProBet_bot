@@ -1,67 +1,76 @@
 import streamlit as st
 import requests
 
+# 1. إعدادات الصفحة
 st.set_page_config(page_title="PENTAGON AI PRO", page_icon="📈", layout="wide")
-st.title("📈 PENTAGON AI PRO - النظام الاحترافي")
+st.title("📈 PENTAGON AI PRO - النظام الاحترافي الشامل")
 
-headers = {
+# إعدادات الـ API
+HEADERS = {
     "x-rapidapi-key": st.secrets["RAPIDAPI_KEY"],
     "x-rapidapi-host": "flashscore4.p.rapidapi.com"
 }
 
-# 1. جلب المباريات
-def get_matches(status="live"):
-    url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/{status}"
+# 2. الدوال الأساسية
+def get_matches(endpoint):
+    url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/{endpoint}"
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=HEADERS)
         return response.json() if response.status_code == 200 else []
     except:
         return []
 
-# 2. جلب الإحصائيات
 def get_match_stats(match_id):
     url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/stats?match_id={match_id}"
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=HEADERS)
     return response.json() if response.status_code == 200 else {}
 
-# 3. التحليل
-def analyze_betting_opportunities(stats_data):
+def analyze_betting(stats_data):
     url = "https://api.openmodel.ai/v1/responses"
     headers_ai = {"Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}", "Content-Type": "application/json"}
-    prompt = f"حلل البيانات التالية بدقة: {str(stats_data)}. اقترح رهانين أو ثلاثة آمنة (Odds > 1.5) مع تبرير إحصائي لكل رهان."
+    prompt = f"""
+    أنت محلل رهانات محترف. حلل هذه البيانات: {str(stats_data)}.
+    المطلوب:
+    1. حساب احتمالات بويسون (Poisson) للأهداف.
+    2. اقتراح 2-3 رهانات آمنة (Odds > 1.5) مع التبرير الإحصائي.
+    3. التركيز على الاستدلال الرياضي وليس التوقعات العشوائية.
+    """
     response = requests.post(url, headers=headers_ai, json={"model": "gpt-5.5", "input": prompt})
-    return response.json()['output'][0]['content'][0]['text'] if response.status_code == 200 else "خطأ في التحليل"
+    return response.json()['output'][0]['content'][0]['text'] if response.status_code == 200 else "خطأ في الاتصال بالذكاء الاصطناعي."
 
-# 4. الواجهة (هنا كان الخلل)
-tab1, tab2 = st.tabs(["🔴 مباريات مباشرة", "🗓️ مباريات قادمة"])
+# 3. الواجهة
+tab1, tab2 = st.tabs(["🔴 مباريات مباشرة (Live)", "🗓️ مباريات قادمة (Fixtures)"])
 
-# دالة مساعدة لعرض القوائم
-def display_matches(status):
+def process_tab(status, tab_name):
     matches = get_matches(status)
     if not matches:
-        st.write("لا توجد مباريات حالياً.")
+        st.write(f"لا توجد {tab_name} حالياً.")
         return None
     
-    match_list = [m['home']['name'] + " vs " + m['away']['name'] for m in matches]
-    choice = st.selectbox(f"اختر مباراة ({status}):", match_list, key=f"sel_{status}")
+    match_names = [f"{m['home']['name']} vs {m['away']['name']}" for m in matches]
+    choice = st.selectbox(f"اختر مباراة من {tab_name}:", match_names, key=f"sel_{status}")
     
-    if st.button(f"🚀 تحليل {status}", key=f"btn_{status}"):
-        idx = match_list.index(choice)
+    if st.button(f"🚀 تحليل {tab_name}", key=f"btn_{status}"):
+        idx = match_names.index(choice)
         return matches[idx]['id']
     return None
 
 with tab1:
-    selected_id = display_matches("live")
-
+    selected_id = process_tab("live", "المباشر")
 with tab2:
-    if not selected_id: # إذا لم يختر من live
-        selected_id = display_matches("fixtures")
+    if not selected_id:
+        selected_id = process_tab("fixtures", "القادمة")
 
-# تنفيذ التحليل النهائي
+# 4. تنفيذ التحليل
 if selected_id:
-    with st.spinner('جاري التحليل...'):
+    with st.spinner('جاري جمع الإحصائيات وبناء النموذج...'):
         stats = get_match_stats(selected_id)
         if stats:
-            st.write(analyze_betting_opportunities(stats))
+            analysis = analyze_betting(stats)
+            st.success("✅ تحليل الفرصة المقتنصة:")
+            st.write(analysis)
         else:
-            st.warning("تعذر جلب إحصائيات هذه المباراة.")
+            st.error("لم نتمكن من جلب إحصائيات هذه المباراة.")
+
+# رابط إضافي للتأكد من أن الـ API يعمل
+st.sidebar.info("ملاحظة: إذا لم تظهر مباريات، جرب تحديث الصفحة لاحقاً.")
