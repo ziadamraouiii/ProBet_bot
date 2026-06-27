@@ -1,53 +1,55 @@
 import streamlit as st
 import requests
 
-st.set_page_config(page_title="PENTAGON AI PRO", page_icon="⚽", layout="wide")
-st.title("⚽ PENTAGON AI PRO - النظام الهجين")
+st.set_page_config(page_title="PENTAGON AI PRO", page_icon="🎯", layout="wide")
+st.title("🎯 PENTAGON AI PRO - صياد الرهانات")
 
-# 1. جلب البيانات من الـ API الذي قدمته
-def get_match_data(match_id):
-    url = f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/point-by-point"
-    querystring = {"match_id": match_id}
+# دالة جلب المباريات الحية (بدل البحث بالـ ID)
+def get_live_matches():
+    url = "https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/live"
     headers = {
-        "x-rapidapi-key": "c1f2624c03mshfd0d4445263443dp1964a4jsna5852c4b9947",
+        "x-rapidapi-key": st.secrets["RAPIDAPI_KEY"],
         "x-rapidapi-host": "flashscore4.p.rapidapi.com"
     }
-    response = requests.get(url, headers=headers, params=querystring)
-    return response.json() if response.status_code == 200 else None
+    response = requests.get(url, headers=headers)
+    return response.json() if response.status_code == 200 else []
 
-# 2. تحليل الذكاء الاصطناعي (النموذج الهجين)
-def get_ai_analysis(match_data):
+# دالة التحليل الاستباقي (البرومبت المطور)
+def get_pro_analysis(match_data):
     url = "https://api.openmodel.ai/v1/responses"
     headers = {
         "Authorization": f"Bearer {st.secrets['DEEPSEEK_API_KEY']}",
         "Content-Type": "application/json"
     }
     
-    # التعليمات الهجينة (Poisson + AI Context)
+    # البرومبت الجديد: "صياد الفرص"
     prompt = f"""
-    أنت خبير رهانات رياضية. حلل بيانات المباراة: {str(match_data)[:2000]}.
+    أنت محلل رهانات محترف. حلل هذه المباراة: {str(match_data)[:3000]}.
     مهمتك:
-    1. قم بتطبيق منطق 'توزيع بويسون' (Poisson) لتقدير احتمالات الأهداف بناءً على النقاط المسجلة.
-    2. ادمج ذلك مع الأداء اللحظي (Point by point).
-    3. أعطني نتيجة واحدة (1X2 أو Over/Under) مع نسبة ثقة.
+    1. ابحث عن أي رهان (1X2, Over/Under, Handicap) تكون احتمالية حدوثه تتجاوز 75% بناءً على إحصائيات المباراة الحية.
+    2. إذا وجدت رهانًا "قريب جداً للحدوث"، قم بتسليط الضوء عليه بوضوح مع ذكر السبب.
+    3. لا تعطني تحليلات عامة، أريد اقتراحاً محدداً لرهان واحد قوي بناءً على الأداء اللحظي.
     """
     
     payload = {"model": "gpt-5.5", "input": prompt}
     response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        data = response.json()
-        return str(data.get('output', data.get('content', '')))
-    return "خطأ في الاتصال"
+    return response.json()['output'][0]['content'][0]['text'] if response.status_code == 200 else "خطأ في الاتصال"
 
-# 3. واجهة الاستخدام
-match_id = st.text_input("📍 أدخل معرف المباراة (Match ID):", value="xp0yZYPr")
-
-if st.button("🚀 بدء التحليل الهجين"):
-    with st.spinner('جاري معالجة البيانات وبناء النموذج...'):
-        data = get_match_data(match_id)
-        if data:
-            analysis = get_ai_analysis(data)
-            st.success("✅ التحليل الاستراتيجي:")
-            st.write(analysis)
-        else:
-            st.error("⚠️ فشل جلب البيانات. تأكد من الـ Match ID.")
+# الواجهة
+matches = get_live_matches()
+if matches:
+    match_names = [m['home']['name'] + " vs " + m['away']['name'] for m in matches]
+    selected = st.selectbox("اختر مباراة حية لتحليلها:", match_names)
+    
+    if st.button("🚀 اقتنص الرهان الأقرب"):
+        # جلب بيانات المباراة المختارة
+        match_id = matches[match_names.index(selected)]['id']
+        # جلب تفاصيل المباراة (نفس الـ Endpoint الذي استخدمته)
+        match_details = requests.get(f"https://flashscore4.p.rapidapi.com/api/flashscore/v2/matches/match/point-by-point?match_id={match_id}", 
+                                     headers={"x-rapidapi-key": st.secrets["RAPIDAPI_KEY"]}).json()
+        
+        analysis = get_pro_analysis(match_details)
+        st.success("🎯 رهان الفرصة المقتنصة:")
+        st.write(analysis)
+else:
+    st.write("لا توجد مباريات حية حالياً.")
