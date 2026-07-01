@@ -1,18 +1,14 @@
 """
 ProBet - Football Prediction App
-Advanced football match prediction using ML
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import sys
 import os
 import plotly.express as px
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '.'))
-
+# Import from src folder directly
 from src.scrapers.data_fetcher import FootballDataFetcher
 from src.analysis.advanced_analyzer import AdvancedFootballAnalyzer
 from src.models.prediction_models import FootballPredictionModels
@@ -359,3 +355,4 @@ with tabs[4]:
     ### ⚠️ Disclaimer
     For analytical and educational purposes only. Not betting advice.
     """)
+
