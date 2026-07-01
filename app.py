@@ -11,7 +11,7 @@ import os
 import plotly.express as px
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '.'))
 
 from src.scrapers.data_fetcher import FootballDataFetcher
 from src.analysis.advanced_analyzer import AdvancedFootballAnalyzer
