@@ -1,36 +1,36 @@
 """
-ProBet - Football Prediction App
-All-in-one file for Streamlit Cloud
+ProBet - Football Prediction App (Real API Version)
+Fixed: Time Leakage, Real Data, TimeSeriesSplit
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
+import requests
 import plotly.express as px
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from scipy import stats
+from typing import Optional, Dict, List
+from dataclasses import dataclass
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score
 import logging
 import warnings
+import time
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════
-# PART 1: Data Fetcher
+# PART 1: REAL DATA FETCHER (API-Football)
 # ═══════════════════════════════════════════════════════
 
 @dataclass
 class MatchData:
-    match_id: str
+    match_id: int
     home_team: str
     away_team: str
     home_goals: int
@@ -55,311 +55,354 @@ class MatchData:
     home_red_cards: Optional[int] = None
     away_red_cards: Optional[int] = None
 
-class FootballDataFetcher:
-    def __init__(self, api_key: Optional[str] = None):
+class RealFootballDataFetcher:
+    def __init__(self, api_key: str):
         self.api_key = api_key
+        self.base_url = "https://api-football-v1.p.rapidapi.com/v3"
+        self.headers = {
+            "X-RapidAPI-Key": api_key,
+            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+        }
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def fetch_leagues(_self):
+        """جلب الدوريات المتاحة"""
+        url = f"{_self.base_url}/leagues"
+        try:
+            resp = requests.get(url, headers=_self.headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                leagues = {}
+                for item in data['response']:
+                    league = item['league']
+                    if league['type'] == 'League':
+                        leagues[league['name']] = league['id']
+                return leagues
+            return {}
+        except Exception as e:
+            logger.error(f"API League Error: {e}")
+            return {}
+
+    @st.cache_data(ttl=7200, show_spinner=False)
+    def fetch_historical_data(_self, league_id: int, season: str, limit: int = 1500):
+        """جلب المباريات التاريخية مع الإحصائيات"""
+        fixtures_url = f"{_self.base_url}/fixtures"
+        params = {"league": league_id, "season": season, "status": "FT"}
         
-    def generate_sample_data(self, n_matches: int = 5000) -> pd.DataFrame:
-        np.random.seed(42)
-        
-        teams_pool = [
-            "Manchester City", "Liverpool", "Arsenal", "Chelsea", "Manchester United",
-            "Tottenham", "Newcastle", "Aston Villa", "Brighton", "West Ham",
-            "Real Madrid", "Barcelona", "Atletico Madrid", "Sevilla", "Valencia",
-            "Bayern Munich", "Borussia Dortmund", "RB Leipzig", "Bayer Leverkusen", "Eintracht Frankfurt",
-            "Juventus", "AC Milan", "Inter Milan", "Napoli", "Roma",
-            "PSG", "Marseille", "Lyon", "Monaco", "Lille",
-            "Al Nassr", "Al Hilal", "Al Ahli", "Al Ittihad", "Al Ettifaq",
-            "Al Ahly", "Zamalek", "Pyramids", "Future FC", "Ceramica Cleopatra",
-        ]
-        
-        leagues = ["EPL", "LaLiga", "Bundesliga", "SerieA", "Ligue1", "SaudiProLeague", "EgyptianPremierLeague"]
-        
-        data = []
-        for i in range(n_matches):
-            home_team = np.random.choice(teams_pool)
-            away_team = np.random.choice([t for t in teams_pool if t != home_team])
-            league = np.random.choice(leagues)
+        try:
+            resp = requests.get(fixtures_url, headers=_self.headers, params=params)
+            if resp.status_code != 200:
+                return pd.DataFrame()
             
-            home_possession = np.random.normal(52, 8)
-            home_possession = max(30, min(70, home_possession))
-            away_possession = 100 - home_possession
+            fixtures = resp.json().get('response', [])
+            if not fixtures:
+                return pd.DataFrame()
             
-            home_shots = max(0, int(np.random.normal(12, 4)))
-            away_shots = max(0, int(np.random.normal(10, 4)))
+            matches = []
+            total = len(fixtures)
+            # تحديد حد أقصى للتجربة
+            if total > limit:
+                fixtures = fixtures[:limit]
             
-            home_shots_on_target = max(0, min(home_shots, int(np.random.normal(4, 2))))
-            away_shots_on_target = max(0, min(away_shots, int(np.random.normal(3, 2))))
+            progress_bar = st.progress(0, text="جلب الإحصائيات التفصيلية...")
             
-            home_corners = max(0, int(np.random.normal(5, 2)))
-            away_corners = max(0, int(np.random.normal(4, 2)))
+            for idx, f in enumerate(fixtures):
+                f_data = f['fixture']
+                teams = f['teams']
+                goals = f['goals']
+                
+                # جلب الإحصائيات لكل مباراة
+                stat_url = f"{_self.base_url}/fixtures/statistics"
+                stat_resp = requests.get(stat_url, headers=_self.headers, params={"fixture": f_data['id']})
+                stats = {}
+                if stat_resp.status_code == 200:
+                    stat_data = stat_resp.json().get('response', [])
+                    if stat_data and isinstance(stat_data, list) and len(stat_data) > 0:
+                        for team_stat in stat_data[0]:
+                            team_name = team_stat['team']['name']
+                            for stat_item in team_stat['statistics']:
+                                key = stat_item['type'].lower().replace(' ', '_')
+                                val = stat_item['value']
+                                if val is None:
+                                    val = 0
+                                elif isinstance(val, str) and '%' in val:
+                                    val = float(val.replace('%', ''))
+                                stats[f"{team_name}_{key}"] = val
+                
+                home_name = teams['home']['name']
+                away_name = teams['away']['name']
+                
+                # استخراج القيم (مع fallback)
+                def get_stat(prefix, key, default=0):
+                    val = stats.get(f"{prefix}_{key}", default)
+                    if isinstance(val, str):
+                        try: return float(val)
+                        except: return default
+                    return val if val is not None else default
+                
+                # API لا يوفر xG مجاناً، نستخدم معادلة تقديرية عادلة (0.3 * التسديد على المرمى)
+                home_xg = get_stat(home_name, 'shots_on_goal', 0) * 0.3
+                away_xg = get_stat(away_name, 'shots_on_goal', 0) * 0.3
+                
+                match = {
+                    'match_id': f_data['id'],
+                    'home_team': home_name,
+                    'away_team': away_name,
+                    'home_goals': goals['home'] or 0,
+                    'away_goals': goals['away'] or 0,
+                    'date': datetime.strptime(f_data['date'][:10], '%Y-%m-%d'),
+                    'league': f_data['league']['name'],
+                    'season': season,
+                    'home_xg': home_xg,
+                    'away_xg': away_xg,
+                    'home_possession': get_stat(home_name, 'possession', 50),
+                    'away_possession': get_stat(away_name, 'possession', 50),
+                    'home_shots': get_stat(home_name, 'total_shots', 0),
+                    'away_shots': get_stat(away_name, 'total_shots', 0),
+                    'home_shots_on_target': get_stat(home_name, 'shots_on_goal', 0),
+                    'away_shots_on_target': get_stat(away_name, 'shots_on_goal', 0),
+                    'home_corners': get_stat(home_name, 'corner_kicks', 0),
+                    'away_corners': get_stat(away_name, 'corner_kicks', 0),
+                    'home_fouls': get_stat(home_name, 'fouls', 0),
+                    'away_fouls': get_stat(away_name, 'fouls', 0),
+                    'home_yellow_cards': get_stat(home_name, 'yellow_cards', 0),
+                    'away_yellow_cards': get_stat(away_name, 'yellow_cards', 0),
+                    'home_red_cards': get_stat(home_name, 'red_cards', 0),
+                    'away_red_cards': get_stat(away_name, 'red_cards', 0),
+                }
+                matches.append(match)
+                progress_bar.progress((idx + 1) / total, text=f"تم جلب {idx+1}/{total}")
             
-            home_fouls = max(0, int(np.random.normal(12, 4)))
-            away_fouls = max(0, int(np.random.normal(11, 4)))
-            
-            home_yellow = max(0, int(np.random.poisson(1.5)))
-            away_yellow = max(0, int(np.random.poisson(1.5)))
-            
-            home_red = 1 if np.random.random() < 0.05 else 0
-            away_red = 1 if np.random.random() < 0.05 else 0
-            
-            home_xg = max(0, np.random.normal(1.4, 0.8))
-            away_xg = max(0, np.random.normal(1.1, 0.7))
-            
-            home_goals = np.random.poisson(home_xg * 0.7 + 0.3)
-            away_goals = np.random.poisson(away_xg * 0.7 + 0.3)
-            
-            match = {
-                'match_id': f"M{i:06d}",
-                'home_team': home_team,
-                'away_team': away_team,
-                'home_goals': home_goals,
-                'away_goals': away_goals,
-                'date': datetime(2023, 8, 1) + timedelta(days=i % 300),
-                'league': league,
-                'season': '2023-24' if i < 2500 else '2024-25',
-                'home_xg': round(home_xg, 2),
-                'away_xg': round(away_xg, 2),
-                'home_possession': round(home_possession, 1),
-                'away_possession': round(away_possession, 1),
-                'home_shots': home_shots,
-                'away_shots': away_shots,
-                'home_shots_on_target': home_shots_on_target,
-                'away_shots_on_target': away_shots_on_target,
-                'home_corners': home_corners,
-                'away_corners': away_corners,
-                'home_fouls': home_fouls,
-                'away_fouls': away_fouls,
-                'home_yellow_cards': home_yellow,
-                'away_yellow_cards': away_yellow,
-                'home_red_cards': home_red,
-                'away_red_cards': away_red,
-            }
-            data.append(match)
-        
-        df = pd.DataFrame(data)
-        logger.info(f"Generated {len(df)} sample matches")
-        return df
+            progress_bar.empty()
+            return pd.DataFrame(matches)
+        except Exception as e:
+            logger.error(f"Fetch Error: {e}")
+            st.error(f"خطأ في جلب البيانات: {e}")
+            return pd.DataFrame()
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def fetch_upcoming_matches(_self, league_id: int, season: str):
+        """جلب المباريات القادمة للتنبؤ"""
+        url = f"{_self.base_url}/fixtures"
+        params = {"league": league_id, "season": season, "status": "NS"}
+        try:
+            resp = requests.get(url, headers=_self.headers, params=params)
+            if resp.status_code == 200:
+                data = resp.json().get('response', [])
+                matches = []
+                for f in data:
+                    f_data = f['fixture']
+                    teams = f['teams']
+                    matches.append({
+                        'match_id': f_data['id'],
+                        'home_team': teams['home']['name'],
+                        'away_team': teams['away']['name'],
+                        'date': datetime.strptime(f_data['date'][:10], '%Y-%m-%d'),
+                        'league': f_data['league']['name'],
+                        'season': season
+                    })
+                return pd.DataFrame(matches)
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"Upcoming Error: {e}")
+            return pd.DataFrame()
 
 # ═══════════════════════════════════════════════════════
-# PART 2: Advanced Analyzer
+# PART 2: ADVANCED ANALYZER (FIXED TIME LEAKAGE)
 # ═══════════════════════════════════════════════════════
-
-@dataclass
-class TeamStats:
-    team_name: str
-    matches_played: int = 0
-    wins: int = 0
-    draws: int = 0
-    losses: int = 0
-    goals_scored: int = 0
-    goals_conceded: int = 0
-    xg_scored: float = 0.0
-    xg_conceded: float = 0.0
-    points: int = 0
-    form_last_5: List[str] = None
-    home_wins: int = 0
-    home_draws: int = 0
-    home_losses: int = 0
-    away_wins: int = 0
-    away_draws: int = 0
-    away_losses: int = 0
 
 class AdvancedFootballAnalyzer:
     def __init__(self, matches_df: pd.DataFrame):
         self.df = matches_df.copy()
-        self.team_stats = {}
-        self._calculate_all_stats()
+        if not self.df.empty:
+            self.df['date'] = pd.to_datetime(self.df['date'])
+        self._cache = {}  # لتسريع الحساب المتكرر
+
+    def _get_team_stats(self, team: str, cutoff_date: datetime) -> Dict:
+        """حساب إحصائيات الفريق فقط من المباريات السابقة للتاريخ المحدد"""
+        cache_key = f"{team}_{cutoff_date.strftime('%Y%m%d')}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # فلترة المباريات السابقة
+        team_matches = self.df[
+            ((self.df['home_team'] == team) | (self.df['away_team'] == team)) &
+            (self.df['date'] < cutoff_date)
+        ]
         
-    def _calculate_all_stats(self):
-        all_teams = set(self.df['home_team'].unique()) | set(self.df['away_team'].unique())
-        for team in all_teams:
-            self.team_stats[team] = self._calculate_team_stats(team)
-            
-    def _calculate_team_stats(self, team: str) -> TeamStats:
-        home_matches = self.df[self.df['home_team'] == team]
-        away_matches = self.df[self.df['away_team'] == team]
-        all_matches = pd.concat([home_matches, away_matches])
-        
-        stats = TeamStats(team_name=team)
-        if len(all_matches) == 0:
-            return stats
-            
-        stats.matches_played = len(all_matches)
-        
-        for _, match in all_matches.iterrows():
-            if match['home_team'] == team:
-                stats.goals_scored += match['home_goals']
-                stats.goals_conceded += match['away_goals']
-                stats.xg_scored += match.get('home_xg', 0) or 0
-                stats.xg_conceded += match.get('away_xg', 0) or 0
-                
-                if match['home_goals'] > match['away_goals']:
-                    stats.wins += 1; stats.home_wins += 1; stats.points += 3
-                elif match['home_goals'] == match['away_goals']:
-                    stats.draws += 1; stats.home_draws += 1; stats.points += 1
-                else:
-                    stats.losses += 1; stats.home_losses += 1
-            else:
-                stats.goals_scored += match['away_goals']
-                stats.goals_conceded += match['home_goals']
-                stats.xg_scored += match.get('away_xg', 0) or 0
-                stats.xg_conceded += match.get('home_xg', 0) or 0
-                
-                if match['away_goals'] > match['home_goals']:
-                    stats.wins += 1; stats.away_wins += 1; stats.points += 3
-                elif match['away_goals'] == match['home_goals']:
-                    stats.draws += 1; stats.away_draws += 1; stats.points += 1
-                else:
-                    stats.losses += 1; stats.away_losses += 1
-        
-        recent = all_matches.sort_values('date').tail(5)
-        form = []
-        for _, match in recent.iterrows():
-            if match['home_team'] == team:
-                form.append('W' if match['home_goals'] > match['away_goals'] else 'D' if match['home_goals'] == match['away_goals'] else 'L')
-            else:
-                form.append('W' if match['away_goals'] > match['home_goals'] else 'D' if match['away_goals'] == match['home_goals'] else 'L')
-        stats.form_last_5 = form
-        return stats
-    
-    def factor_1_form(self, team: str) -> float:
-        stats = self.team_stats.get(team)
-        if not stats or not stats.form_last_5:
-            return 0.5
-        points = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in stats.form_last_5)
-        max_points = len(stats.form_last_5) * 3
-        return points / max_points if max_points > 0 else 0.5
-    
-    def factor_2_offensive_strength(self, team: str, is_home: bool = True) -> float:
-        stats = self.team_stats.get(team)
-        if not stats or stats.matches_played == 0:
-            return 1.0
-        avg_goals = stats.goals_scored / stats.matches_played
-        avg_xg = stats.xg_scored / stats.matches_played
-        strength = (avg_goals * 0.4 + avg_xg * 0.6)
-        return max(0.1, strength)
-    
-    def factor_3_defensive_strength(self, team: str, is_home: bool = True) -> float:
-        stats = self.team_stats.get(team)
-        if not stats or stats.matches_played == 0:
-            return 1.0
-        avg_conceded = stats.goals_conceded / stats.matches_played
-        avg_xg_conceded = stats.xg_conceded / stats.matches_played
-        combined = avg_conceded * 0.4 + avg_xg_conceded * 0.6
-        strength = 1 / (1 + combined)
-        return max(0.1, strength)
-    
-    def factor_4_home_away_advantage(self, team: str, is_home: bool = True) -> float:
-        stats = self.team_stats.get(team)
-        if not stats:
-            return 1.0 if is_home else 0.8
-        if is_home:
-            total_home = stats.home_wins + stats.home_draws + stats.home_losses
-            if total_home == 0: return 1.0
-            return (stats.home_wins * 3 + stats.home_draws) / (total_home * 3)
+        if len(team_matches) == 0:
+            stats = {
+                'matches': 0, 'goals_scored': 0, 'goals_conceded': 0,
+                'xg_scored': 0.0, 'xg_conceded': 0.0,
+                'wins': 0, 'draws': 0, 'losses': 0,
+                'home_wins': 0, 'home_draws': 0, 'home_losses': 0,
+                'away_wins': 0, 'away_draws': 0, 'away_losses': 0,
+                'form': [], 'yellow_avg': 0, 'red_avg': 0,
+                'shots_on_target': 0, 'goals_against_avg': 1.5
+            }
         else:
-            total_away = stats.away_wins + stats.away_draws + stats.away_losses
-            if total_away == 0: return 0.8
-            return (stats.away_wins * 3 + stats.away_draws) / (total_away * 3)
-    
-    def factor_5_head_to_head(self, home_team: str, away_team: str) -> Dict[str, float]:
+            goals_scored = goals_conceded = 0
+            xg_scored = xg_conceded = 0.0
+            wins = draws = losses = 0
+            h_wins = h_draws = h_losses = 0
+            a_wins = a_draws = a_losses = 0
+            yellows = reds = 0
+            shots_on_target = 0
+            goals_against = []
+
+            for _, row in team_matches.iterrows():
+                if row['home_team'] == team:
+                    goals_scored += row['home_goals']
+                    goals_conceded += row['away_goals']
+                    xg_scored += row.get('home_xg', 0) or 0
+                    xg_conceded += row.get('away_xg', 0) or 0
+                    shots_on_target += row.get('home_shots_on_target', 0) or 0
+                    goals_against.append(row['away_goals'])
+                    if row['home_goals'] > row['away_goals']:
+                        wins += 1; h_wins += 1
+                    elif row['home_goals'] == row['away_goals']:
+                        draws += 1; h_draws += 1
+                    else:
+                        losses += 1; h_losses += 1
+                    yellows += row.get('home_yellow_cards', 0) or 0
+                    reds += row.get('home_red_cards', 0) or 0
+                else:
+                    goals_scored += row['away_goals']
+                    goals_conceded += row['home_goals']
+                    xg_scored += row.get('away_xg', 0) or 0
+                    xg_conceded += row.get('home_xg', 0) or 0
+                    shots_on_target += row.get('away_shots_on_target', 0) or 0
+                    goals_against.append(row['home_goals'])
+                    if row['away_goals'] > row['home_goals']:
+                        wins += 1; a_wins += 1
+                    elif row['away_goals'] == row['home_goals']:
+                        draws += 1; a_draws += 1
+                    else:
+                        losses += 1; a_losses += 1
+                    yellows += row.get('away_yellow_cards', 0) or 0
+                    reds += row.get('away_red_cards', 0) or 0
+
+            # الشكل (آخر 5)
+            recent = team_matches.sort_values('date').tail(5)
+            form = []
+            for _, row in recent.iterrows():
+                if row['home_team'] == team:
+                    form.append('W' if row['home_goals'] > row['away_goals'] else 'D' if row['home_goals'] == row['away_goals'] else 'L')
+                else:
+                    form.append('W' if row['away_goals'] > row['home_goals'] else 'D' if row['away_goals'] == row['home_goals'] else 'L')
+            
+            n = len(team_matches)
+            stats = {
+                'matches': n,
+                'goals_scored': goals_scored,
+                'goals_conceded': goals_conceded,
+                'xg_scored': xg_scored,
+                'xg_conceded': xg_conceded,
+                'wins': wins, 'draws': draws, 'losses': losses,
+                'home_wins': h_wins, 'home_draws': h_draws, 'home_losses': h_losses,
+                'away_wins': a_wins, 'away_draws': a_draws, 'away_losses': a_losses,
+                'form': form,
+                'yellow_avg': yellows / n if n > 0 else 0,
+                'red_avg': reds / n if n > 0 else 0,
+                'shots_on_target': shots_on_target,
+                'goals_against_avg': np.mean(goals_against) if goals_against else 1.5
+            }
+        
+        self._cache[cache_key] = stats
+        return stats
+
+    def get_all_factors(self, home_team: str, away_team: str, match_date: datetime) -> Dict:
+        """استخراج العوامل الثمانية بناءً على التاريخ"""
+        home_stats = self._get_team_stats(home_team, match_date)
+        away_stats = self._get_team_stats(away_team, match_date)
+        
+        # حساب العوامل
+        def form_score(stats):
+            if not stats['form']:
+                return 0.5
+            pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in stats['form'])
+            return pts / (len(stats['form']) * 3)
+        
+        def offensive(stats):
+            if stats['matches'] == 0: return 1.0
+            avg_g = stats['goals_scored'] / stats['matches']
+            avg_xg = stats['xg_scored'] / stats['matches']
+            return max(0.1, avg_g * 0.4 + avg_xg * 0.6)
+        
+        def defensive(stats):
+            if stats['matches'] == 0: return 1.0
+            avg_con = stats['goals_conceded'] / stats['matches']
+            avg_xgc = stats['xg_conceded'] / stats['matches']
+            combined = avg_con * 0.4 + avg_xgc * 0.6
+            return max(0.1, 1 / (1 + combined))
+        
+        def home_advantage(stats):
+            total = stats['home_wins'] + stats['home_draws'] + stats['home_losses']
+            if total == 0: return 0.5
+            return (stats['home_wins'] * 3 + stats['home_draws']) / (total * 3)
+        
+        def away_advantage(stats):
+            total = stats['away_wins'] + stats['away_draws'] + stats['away_losses']
+            if total == 0: return 0.5
+            return (stats['away_wins'] * 3 + stats['away_draws']) / (total * 3)
+        
+        # المواجهات المباشرة (بدون تسرب زمني)
         h2h = self.df[
             ((self.df['home_team'] == home_team) & (self.df['away_team'] == away_team)) |
             ((self.df['home_team'] == away_team) & (self.df['away_team'] == home_team))
-        ].sort_values('date')
+        ]
+        h2h = h2h[h2h['date'] < match_date].sort_values('date').tail(10)
+        h_w = a_w = d = 0
+        for _, row in h2h.iterrows():
+            if row['home_team'] == home_team:
+                if row['home_goals'] > row['away_goals']: h_w += 1
+                elif row['home_goals'] < row['away_goals']: a_w += 1
+                else: d += 1
+            else:
+                if row['away_goals'] > row['home_goals']: h_w += 1
+                elif row['away_goals'] < row['home_goals']: a_w += 1
+                else: d += 1
+        total_h2h = h_w + a_w + d
+        if total_h2h == 0:
+            h2h_vals = {'home': 0.5, 'away': 0.5, 'draw': 0.33}
+        else:
+            h2h_vals = {'home': h_w/total_h2h, 'away': a_w/total_h2h, 'draw': d/total_h2h}
         
-        if len(h2h) == 0:
-            return {'home_advantage': 0.5, 'draw_tendency': 0.33}
+        def discipline(stats):
+            return max(0.1, min(1.0, 1 - (stats['yellow_avg'] * 0.05 + stats['red_avg'] * 0.3)))
         
-        home_wins = away_wins = draws = 0
-        for _, match in h2h.tail(10).iterrows():
-            if match['home_team'] == home_team:
-                if match['home_goals'] > match['away_goals']: home_wins += 1
-                elif match['home_goals'] < match['away_goals']: away_wins += 1
-                else: draws += 1
-            else:
-                if match['away_goals'] > match['home_goals']: home_wins += 1
-                elif match['away_goals'] < match['home_goals']: away_wins += 1
-                else: draws += 1
+        def efficiency(stats):
+            if stats['shots_on_target'] == 0: return 0.3
+            return min(1.0, (stats['goals_scored'] / stats['shots_on_target']) / 0.3)
         
-        total = home_wins + away_wins + draws
-        if total == 0: return {'home_advantage': 0.5, 'draw_tendency': 0.33}
-        return {'home_advantage': home_wins / total, 'away_advantage': away_wins / total, 'draw_tendency': draws / total}
-    
-    def factor_6_discipline(self, team: str) -> float:
-        team_matches = self.df[(self.df['home_team'] == team) | (self.df['away_team'] == team)]
-        if len(team_matches) == 0: return 0.5
-        total_yellow = total_red = 0
-        for _, match in team_matches.iterrows():
-            if match['home_team'] == team:
-                total_yellow += match.get('home_yellow_cards', 0) or 0
-                total_red += match.get('home_red_cards', 0) or 0
-            else:
-                total_yellow += match.get('away_yellow_cards', 0) or 0
-                total_red += match.get('away_red_cards', 0) or 0
-        avg_yellow = total_yellow / len(team_matches)
-        avg_red = total_red / len(team_matches)
-        return max(0.1, min(1.0, 1 - (avg_yellow * 0.05 + avg_red * 0.3)))
-    
-    def factor_7_shot_efficiency(self, team: str) -> float:
-        team_matches = self.df[(self.df['home_team'] == team) | (self.df['away_team'] == team)]
-        if len(team_matches) == 0: return 0.3
-        total_goals = total_shots_on_target = 0
-        for _, match in team_matches.iterrows():
-            if match['home_team'] == team:
-                total_goals += match['home_goals']
-                total_shots_on_target += match.get('home_shots_on_target', 0) or 0
-            else:
-                total_goals += match['away_goals']
-                total_shots_on_target += match.get('away_shots_on_target', 0) or 0
-        if total_shots_on_target == 0: return 0.3
-        return min(1.0, (total_goals / total_shots_on_target) / 0.3)
-    
-    def factor_8_momentum(self, team: str) -> float:
-        team_matches = self.df[(self.df['home_team'] == team) | (self.df['away_team'] == team)].sort_values('date').tail(10)
-        if len(team_matches) < 5: return 0.5
-        results = []
-        for _, match in team_matches.iterrows():
-            if match['home_team'] == team:
-                results.append(match['home_goals'] - match['away_goals'])
-            else:
-                results.append(match['away_goals'] - match['home_goals'])
-        x = np.arange(len(results))
-        slope, _, _, _, _ = stats.linregress(x, results)
-        return max(0.1, min(1.0, 0.5 + (slope * 0.1)))
-    
-    def get_all_factors(self, home_team: str, away_team: str) -> Dict[str, float]:
-        h2h = self.factor_5_head_to_head(home_team, away_team)
+        def momentum(stats):
+            if len(stats['form']) < 5: return 0.5
+            results = [1 if f == 'W' else 0 if f == 'L' else 0.5 for f in stats['form']]
+            if len(results) < 2: return 0.5
+            return np.mean(results)  # تبسيط بدلاً من الانحدار الخطي
+
         return {
-            'home_form': self.factor_1_form(home_team),
-            'away_form': self.factor_1_form(away_team),
-            'home_offense': self.factor_2_offensive_strength(home_team, True),
-            'away_offense': self.factor_2_offensive_strength(away_team, False),
-            'home_defense': self.factor_3_defensive_strength(home_team, True),
-            'away_defense': self.factor_3_defensive_strength(away_team, False),
-            'home_advantage': self.factor_4_home_away_advantage(home_team, True),
-            'away_advantage': self.factor_4_home_away_advantage(away_team, False),
-            'h2h_home': h2h['home_advantage'],
-            'h2h_draw': h2h['draw_tendency'],
-            'home_discipline': self.factor_6_discipline(home_team),
-            'away_discipline': self.factor_6_discipline(away_team),
-            'home_efficiency': self.factor_7_shot_efficiency(home_team),
-            'away_efficiency': self.factor_7_shot_efficiency(away_team),
-            'home_momentum': self.factor_8_momentum(home_team),
-            'away_momentum': self.factor_8_momentum(away_team),
+            'home_form': form_score(home_stats),
+            'away_form': form_score(away_stats),
+            'home_offense': offensive(home_stats),
+            'away_offense': offensive(away_stats),
+            'home_defense': defensive(home_stats),
+            'away_defense': defensive(away_stats),
+            'home_advantage': home_advantage(home_stats),
+            'away_advantage': away_advantage(away_stats),
+            'h2h_home': h2h_vals['home'],
+            'h2h_draw': h2h_vals['draw'],
+            'home_discipline': discipline(home_stats),
+            'away_discipline': discipline(away_stats),
+            'home_efficiency': efficiency(home_stats),
+            'away_efficiency': efficiency(away_stats),
+            'home_momentum': momentum(home_stats),
+            'away_momentum': momentum(away_stats),
         }
 
 # ═══════════════════════════════════════════════════════
-# PART 3: Prediction Models
+# PART 3: PREDICTION MODELS (FIXED TIME SPLIT)
 # ═══════════════════════════════════════════════════════
-
-try:
-    import xgboost as xgb
-    XGBOOST_AVAILABLE = True
-except ImportError:
-    XGBOOST_AVAILABLE = False
-    from sklearn.ensemble import GradientBoostingClassifier
 
 class FootballPredictionModels:
     def __init__(self):
@@ -369,37 +412,39 @@ class FootballPredictionModels:
         self.scaler = StandardScaler()
         self.feature_names = []
         self.is_trained = False
-        
-    def prepare_features(self, df: pd.DataFrame, analyzer) -> pd.DataFrame:
+        self.analyzer = None
+
+    def prepare_features(self, df: pd.DataFrame, analyzer, match_date=None) -> pd.DataFrame:
         features_list = []
         for idx, row in df.iterrows():
-            home_team = row['home_team']
-            away_team = row['away_team']
-            factors = analyzer.get_all_factors(home_team, away_team)
+            date = match_date if match_date else row['date']
+            factors = analyzer.get_all_factors(row['home_team'], row['away_team'], date)
+            h_stats = analyzer._get_team_stats(row['home_team'], date)
+            a_stats = analyzer._get_team_stats(row['away_team'], date)
             
             feature_vector = {
                 'form_diff': factors['home_form'] - factors['away_form'],
                 'offense_diff': factors['home_offense'] - factors['away_offense'],
                 'defense_diff': factors['home_defense'] - factors['away_defense'],
                 'home_ground_advantage': factors['home_advantage'] - factors['away_advantage'],
-                'h2h_home_bias': factors['h2h_home'] - (1 - factors['h2h_home'] - factors['h2h_draw']),
+                'h2h_home_bias': factors['h2h_home'] - factors['h2h_away'],
                 'h2h_draw_tendency': factors['h2h_draw'],
                 'discipline_diff': factors['home_discipline'] - factors['away_discipline'],
                 'efficiency_diff': factors['home_efficiency'] - factors['away_efficiency'],
                 'momentum_diff': factors['home_momentum'] - factors['away_momentum'],
-                'home_goals_avg': analyzer.team_stats[home_team].goals_scored / max(1, analyzer.team_stats[home_team].matches_played) if home_team in analyzer.team_stats else 1.5,
-                'away_goals_avg': analyzer.team_stats[away_team].goals_scored / max(1, analyzer.team_stats[away_team].matches_played) if away_team in analyzer.team_stats else 1.2,
-                'home_conceded_avg': analyzer.team_stats[home_team].goals_conceded / max(1, analyzer.team_stats[home_team].matches_played) if home_team in analyzer.team_stats else 1.2,
-                'away_conceded_avg': analyzer.team_stats[away_team].goals_conceded / max(1, analyzer.team_stats[away_team].matches_played) if away_team in analyzer.team_stats else 1.5,
-                'home_xg_avg': analyzer.team_stats[home_team].xg_scored / max(1, analyzer.team_stats[home_team].matches_played) if home_team in analyzer.team_stats else 1.4,
-                'away_xg_avg': analyzer.team_stats[away_team].xg_scored / max(1, analyzer.team_stats[away_team].matches_played) if away_team in analyzer.team_stats else 1.1,
+                'home_goals_avg': (h_stats['goals_scored'] / max(1, h_stats['matches'])),
+                'away_goals_avg': (a_stats['goals_scored'] / max(1, a_stats['matches'])),
+                'home_conceded_avg': (h_stats['goals_conceded'] / max(1, h_stats['matches'])),
+                'away_conceded_avg': (a_stats['goals_conceded'] / max(1, a_stats['matches'])),
             }
             features_list.append(feature_vector)
         
         features_df = pd.DataFrame(features_list)
+        # تعبئة القيم المفقودة
+        features_df = features_df.fillna(0)
         self.feature_names = features_df.columns.tolist()
         return features_df
-    
+
     def create_target(self, df: pd.DataFrame) -> np.ndarray:
         targets = []
         for _, row in df.iterrows():
@@ -407,248 +452,245 @@ class FootballPredictionModels:
             elif row['home_goals'] == row['away_goals']: targets.append(1)
             else: targets.append(0)
         return np.array(targets)
-    
-    def train(self, X: pd.DataFrame, y: np.ndarray, test_size: float = 0.2):
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
+
+    def train(self, X: pd.DataFrame, y: np.ndarray, dates: pd.Series):
+        """تدريب مع TimeSeriesSplit لمنع التسرب"""
+        # ترتيب حسب التاريخ
+        sorted_idx = np.argsort(dates)
+        X = X.iloc[sorted_idx].reset_index(drop=True)
+        y = y[sorted_idx]
         
-        # Random Forest
-        self.rf_model = RandomForestClassifier(n_estimators=200, max_depth=15, min_samples_split=5, min_samples_leaf=2, random_state=42, n_jobs=-1, class_weight='balanced')
-        self.rf_model.fit(X_train, y_train)
-        rf_acc = accuracy_score(y_test, self.rf_model.predict(X_test))
+        # استخدام TimeSeriesSplit
+        tscv = TimeSeriesSplit(n_splits=3)
+        rf_scores = []
+        xgb_scores = []
+        lr_scores = []
         
-        # XGBoost
-        if XGBOOST_AVAILABLE:
-            self.xgb_model = xgb.XGBClassifier(n_estimators=200, max_depth=6, learning_rate=0.1, subsample=0.8, colsample_bytree=0.8, random_state=42, eval_metric='mlogloss')
-        else:
-            self.xgb_model = GradientBoostingClassifier(n_estimators=200, max_depth=6, learning_rate=0.1, random_state=42)
-        self.xgb_model.fit(X_train, y_train)
-        xgb_acc = accuracy_score(y_test, self.xgb_model.predict(X_test))
+        # تدريب أخير split للتقييم النهائي
+        for train_idx, test_idx in tscv.split(X):
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
+            
+            # StandardScaler
+            self.scaler.fit(X_train)
+            X_train_scaled = self.scaler.transform(X_train)
+            X_test_scaled = self.scaler.transform(X_test)
+            
+            # Random Forest
+            rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+            rf.fit(X_train, y_train)
+            rf_scores.append(accuracy_score(y_test, rf.predict(X_test)))
+            
+            # XGBoost (fallback)
+            try:
+                import xgboost as xgb
+                xgb_model = xgb.XGBClassifier(n_estimators=100, max_depth=5, random_state=42, eval_metric='mlogloss')
+                xgb_model.fit(X_train, y_train)
+                xgb_scores.append(accuracy_score(y_test, xgb_model.predict(X_test)))
+            except:
+                from sklearn.ensemble import GradientBoostingClassifier
+                xgb_model = GradientBoostingClassifier(n_estimators=100, max_depth=5, random_state=42)
+                xgb_model.fit(X_train, y_train)
+                xgb_scores.append(accuracy_score(y_test, xgb_model.predict(X_test)))
+            
+            # LR
+            lr = LogisticRegression(max_iter=1000, random_state=42, multi_class='multinomial')
+            lr.fit(X_train_scaled, y_train)
+            lr_scores.append(accuracy_score(y_test, lr.predict(X_test_scaled)))
+            
+            # حفظ آخر نموذج مدرب
+            self.rf_model = rf
+            self.xgb_model = xgb_model
+            self.lr_model = lr
         
-        # Logistic Regression
-        self.lr_model = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced', multi_class='multinomial')
-        self.lr_model.fit(X_train_scaled, y_train)
-        lr_acc = accuracy_score(y_test, self.lr_model.predict(X_test_scaled))
+        # التدريب النهائي على كامل البيانات (باستثناء آخر 20% للاختبار)
+        train_size = int(len(X) * 0.8)
+        X_train_final, X_test_final = X.iloc[:train_size], X.iloc[train_size:]
+        y_train_final, y_test_final = y[:train_size], y[train_size:]
         
-        rf_cv = cross_val_score(self.rf_model, X, y, cv=5, scoring='accuracy')
+        self.scaler.fit(X_train_final)
+        X_train_scaled = self.scaler.transform(X_train_final)
+        X_test_scaled = self.scaler.transform(X_test_final)
+        
+        self.rf_model.fit(X_train_final, y_train_final)
+        self.xgb_model.fit(X_train_final, y_train_final)
+        self.lr_model.fit(X_train_scaled, y_train_final)
+        
+        final_acc = accuracy_score(y_test_final, self.rf_model.predict(X_test_final))
         self.is_trained = True
         
-        return {'rf_accuracy': rf_acc, 'xgb_accuracy': xgb_acc, 'lr_accuracy': lr_acc, 'rf_cv_mean': rf_cv.mean(), 'rf_cv_std': rf_cv.std(), 'test_size': len(X_test)}
-    
-    def predict(self, X: pd.DataFrame, use_ensemble: bool = True) -> Dict:
-        if not self.is_trained: raise ValueError("Models not trained!")
+        return {
+            'rf_avg': np.mean(rf_scores),
+            'xgb_avg': np.mean(xgb_scores),
+            'lr_avg': np.mean(lr_scores),
+            'final_accuracy': final_acc,
+            'samples': len(X)
+        }
+
+    def predict(self, X: pd.DataFrame) -> Dict:
+        if not self.is_trained:
+            raise ValueError("Models not trained!")
         X_scaled = self.scaler.transform(X)
         
         rf_probs = self.rf_model.predict_proba(X)[0]
-        xgb_probs = self.xgb_model.predict_proba(X)[0] if hasattr(self.xgb_model, 'predict_proba') else [0.33, 0.33, 0.34]
+        xgb_probs = self.xgb_model.predict_proba(X)[0]
         lr_probs = self.lr_model.predict_proba(X_scaled)[0]
         
-        if use_ensemble:
-            ensemble_probs = rf_probs * 0.30 + xgb_probs * 0.45 + lr_probs * 0.25
-        else:
-            ensemble_probs = xgb_probs
-        
+        # Ensemble
+        ensemble_probs = rf_probs * 0.30 + xgb_probs * 0.45 + lr_probs * 0.25
         labels = ['Away Win', 'Draw', 'Home Win']
         classes = ['away_win', 'draw', 'home_win']
         
         return {
             'ensemble_prediction': labels[np.argmax(ensemble_probs)],
             'ensemble_class': classes[np.argmax(ensemble_probs)],
-            'probabilities': {'away_win': round(ensemble_probs[0] * 100, 1), 'draw': round(ensemble_probs[1] * 100, 1), 'home_win': round(ensemble_probs[2] * 100, 1)},
-            'individual_models': {
-                'random_forest': {'prediction': labels[np.argmax(rf_probs)], 'probabilities': {k: round(v * 100, 1) for k, v in zip(classes, rf_probs)}},
-                'xgboost': {'prediction': labels[np.argmax(xgb_probs)], 'probabilities': {k: round(v * 100, 1) for k, v in zip(classes, xgb_probs)}},
-                'logistic_regression': {'prediction': labels[np.argmax(lr_probs)], 'probabilities': {k: round(v * 100, 1) for k, v in zip(classes, lr_probs)}}
+            'probabilities': {
+                'away_win': round(ensemble_probs[0] * 100, 1),
+                'draw': round(ensemble_probs[1] * 100, 1),
+                'home_win': round(ensemble_probs[2] * 100, 1)
             },
-            'confidence': round(max(ensemble_probs) * 100, 1),
-            'feature_importance': self.get_feature_importance()
+            'confidence': round(max(ensemble_probs) * 100, 1)
         }
-    
-    def get_feature_importance(self) -> Dict[str, float]:
-        if self.rf_model is None: return {}
-        importance = self.rf_model.feature_importances_
-        return dict(sorted(zip(self.feature_names, importance), key=lambda x: x[1], reverse=True))
 
 # ═══════════════════════════════════════════════════════
-# PART 4: Streamlit UI
+# PART 4: STREAMLIT UI
 # ═══════════════════════════════════════════════════════
 
-st.set_page_config(page_title="ProBet - Football Predictor", page_icon="⚽", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="ProBet Pro - Real API", page_icon="⚽", layout="wide")
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&display=swap');
-    * { font-family: 'Tajawal', sans-serif; direction: rtl; }
-    .main-header { font-size: 3rem; font-weight: 900; text-align: center; background: linear-gradient(90deg, #1e3a8a, #3b82f6, #1e3a8a); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .metric-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-radius: 15px; padding: 1.5rem; border: 1px solid #334155; text-align: center; }
+    .main-header { font-size: 2.8rem; font-weight: 900; text-align: center; background: linear-gradient(90deg, #1e3a8a, #3b82f6, #1e3a8a); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .metric-card { background: #1e293b; border-radius: 15px; padding: 1.5rem; border: 1px solid #334155; text-align: center; }
     .metric-value { font-size: 2.5rem; font-weight: 900; color: #3b82f6; }
-    .metric-label { color: #94a3b8; font-size: 0.9rem; }
 </style>
 """, unsafe_allow_html=True)
 
-if 'data_loaded' not in st.session_state:
-    st.session_state.data_loaded = False
-    st.session_state.df = None
-    st.session_state.analyzer = None
-    st.session_state.models = None
-    st.session_state.training_results = None
+st.markdown('<div class="main-header">⚽ ProBet Pro (Real API)</div>', unsafe_allow_html=True)
 
+# Sidebar
 with st.sidebar:
-    st.markdown("## ⚙️ الإعدادات")
+    st.markdown("## 🔑 الإعدادات")
+    api_key = st.text_input("مفتاح API-Football", value="800b354d6fa7590c158b6078e1b72381", type="password")
     st.markdown("---")
-    st.markdown("### 📥 مصدر البيانات")
-    data_source = st.radio("المصدر:", ["بيانات تجريبية", "رفع CSV"], index=0)
-    if data_source == "رفع CSV":
-        uploaded_file = st.file_uploader("اختر ملف CSV", type=['csv'])
-    st.markdown("---")
-    st.info("🏆 50+ دوري\n🤖 3 نماذج ML\n📊 8 عوامل\n⚡ فوري")
-    st.markdown("---")
-    st.caption("© 2026 ProBet")
-
-st.markdown('<div class="main-header">⚽ ProBet Football Predictor</div>', unsafe_allow_html=True)
-st.markdown('<p style="text-align: center; color: #64748b; font-size: 1.2rem;">نظام تنبؤ متقدم لكرة القدم</p>', unsafe_allow_html=True)
-
-if not st.session_state.data_loaded:
-    with st.spinner("🔄 جاري التحميل والتحليل..."):
-        fetcher = FootballDataFetcher()
-        df = fetcher.generate_sample_data(n_matches=5000) if data_source == "بيانات تجريبية" else (pd.read_csv(uploaded_file) if 'uploaded_file' in locals() and uploaded_file is not None else fetcher.generate_sample_data(n_matches=5000))
-        
-        st.session_state.df = df
-        st.session_state.analyzer = AdvancedFootballAnalyzer(df)
-        st.session_state.models = FootballPredictionModels()
-        
-        X = st.session_state.models.prepare_features(df, st.session_state.analyzer)
-        y = st.session_state.models.create_target(df)
-        results = st.session_state.models.train(X, y)
-        st.session_state.training_results = results
-        st.session_state.data_loaded = True
-        st.success(f"✅ تم تحميل {len(df)} مباراة و {len(X.columns)} ميزة!")
-
-tabs = st.tabs(["🔮 التنبؤ", "📊 التحليلات", "🤖 أداء النماذج", "📋 الميزات", "📚 الدليل"])
-
-with tabs[0]:
-    st.markdown("## 🔮 التنبؤ بالنتيجة")
-    col1, col2 = st.columns(2)
-    with col1:
-        home_team = st.selectbox("🏠 فريق أصحاب الأرض:", sorted(st.session_state.df['home_team'].unique()), index=0)
-    with col2:
-        away_team = st.selectbox("✈️ فريق الضيف:", sorted([t for t in st.session_state.df['away_team'].unique() if t != home_team]), index=0)
     
-    if st.button("🔮 تنبأ بالنتيجة", type="primary", use_container_width=True):
-        with st.spinner("🧠 جاري التحليل..."):
-            factors = st.session_state.analyzer.get_all_factors(home_team, away_team)
-            single_match = pd.DataFrame([{'home_team': home_team, 'away_team': away_team, 'home_goals': 0, 'away_goals': 0, 'date': pd.Timestamp.now(), 'league': 'Unknown', 'season': '2024-25'}])
-            X_pred = st.session_state.models.prepare_features(single_match, st.session_state.analyzer)
-            prediction = st.session_state.models.predict(X_pred)
+    if api_key:
+        fetcher = RealFootballDataFetcher(api_key)
+        leagues = fetcher.fetch_leagues()
+        
+        if leagues:
+            league_names = list(leagues.keys())
+            selected_league_name = st.selectbox("🏆 اختر الدوري", league_names, index=0)
+            league_id = leagues[selected_league_name]
+            
+            seasons = ["2024", "2023", "2022"]
+            selected_season = st.selectbox("📅 الموسم", seasons, index=0)
+            
+            if st.button("🚀 تحميل البيانات التاريخية", use_container_width=True):
+                with st.spinner("جاري تحميل المباريات..."):
+                    df = fetcher.fetch_historical_data(league_id, selected_season, limit=800)
+                    if not df.empty:
+                        st.session_state.df = df
+                        st.session_state.analyzer = AdvancedFootballAnalyzer(df)
+                        st.session_state.models = FootballPredictionModels()
+                        st.session_state.models.analyzer = st.session_state.analyzer
+                        
+                        # تجهيز التدريب
+                        X = st.session_state.models.prepare_features(df, st.session_state.analyzer)
+                        y = st.session_state.models.create_target(df)
+                        results = st.session_state.models.train(X, y, df['date'])
+                        st.session_state.training_results = results
+                        st.session_state.data_loaded = True
+                        st.success(f"✅ تم تحميل {len(df)} مباراة! الدقة: {results['final_accuracy']:.1%}")
+                    else:
+                        st.error("لا توجد بيانات أو خطأ في المفتاح")
             
             st.markdown("---")
-            c1, c2, c3 = st.columns([2, 1, 2])
-            with c1:
-                st.markdown(f"<h2 style='text-align: center; color: #3b82f6;'>{home_team}</h2>", unsafe_allow_html=True)
-                st.markdown("<p style='text-align: center; color: #94a3b8;'>🏠 أصحاب الأرض</p>", unsafe_allow_html=True)
-            with c2:
-                st.markdown("<h1 style='text-align: center; color: #f59e0b;'>VS</h1>", unsafe_allow_html=True)
-            with c3:
-                st.markdown(f"<h2 style='text-align: center; color: #ef4444;'>{away_team}</h2>", unsafe_allow_html=True)
-                st.markdown("<p style='text-align: center; color: #94a3b8;'>✈️ ضيف</p>", unsafe_allow_html=True)
-            
-            st.markdown("### 📊 احتمالات النتيجة")
-            probs = prediction['probabilities']
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown(f'<div style="background: linear-gradient(135deg, #dc2626, #991b1b); border-radius: 15px; padding: 1.5rem; text-align: center;"><div style="font-size: 2.5rem; font-weight: 900; color: white;">{probs["away_win"]}%</div><div style="color: #fecaca; margin-top: 0.5rem;">فوز {away_team}</div></div>', unsafe_allow_html=True)
-            with col2:
-                st.markdown(f'<div style="background: linear-gradient(135deg, #ca8a04, #854d0e); border-radius: 15px; padding: 1.5rem; text-align: center;"><div style="font-size: 2.5rem; font-weight: 900; color: white;">{probs["draw"]}%</div><div style="color: #fef08a; margin-top: 0.5rem;">تعادل</div></div>', unsafe_allow_html=True)
-            with col3:
-                st.markdown(f'<div style="background: linear-gradient(135deg, #16a34a, #166534); border-radius: 15px; padding: 1.5rem; text-align: center;"><div style="font-size: 2.5rem; font-weight: 900; color: white;">{probs["home_win"]}%</div><div style="color: #bbf7d0; margin-top: 0.5rem;">فوز {home_team}</div></div>', unsafe_allow_html=True)
-            
-            pred_class = prediction['ensemble_class']
-            confidence = prediction['confidence']
-            color, emoji = ('#16a34a', '🏆') if pred_class == 'home_win' else ('#ca8a04', '🤝') if pred_class == 'draw' else ('#dc2626', '✈️')
-            st.markdown(f'<div style="background: {color}; border-radius: 15px; padding: 1.5rem; text-align: center; margin-top: 1rem;"><div style="font-size: 1.8rem; font-weight: 900; color: white;">{emoji} التنبؤ: {prediction["ensemble_prediction"]}</div><div style="color: rgba(255,255,255,0.9); margin-top: 0.5rem;">ثقة النموذج: {confidence}%</div></div>', unsafe_allow_html=True)
-            
-            st.markdown("---")
-            st.markdown("### 📈 العوامل التحليلية (8 عوامل)")
-            factor_data = {
-                'العامل': ['الشكل (آخر 5)', 'القوة الهجومية', 'القوة الدفاعية', 'ميزة الملعب', 'المواجهات المباشرة', 'الانضباط', 'كفاءة التسديد', 'الزخم'],
-                f'{home_team}': [f"{factors['home_form']:.2f}", f"{factors['home_offense']:.2f}", f"{factors['home_defense']:.2f}", f"{factors['home_advantage']:.2f}", f"{factors['h2h_home']:.2f}", f"{factors['home_discipline']:.2f}", f"{factors['home_efficiency']:.2f}", f"{factors['home_momentum']:.2f}"],
-                f'{away_team}': [f"{factors['away_form']:.2f}", f"{factors['away_offense']:.2f}", f"{factors['away_defense']:.2f}", f"{factors['away_advantage']:.2f}", f"{1 - factors['h2h_home'] - factors['h2h_draw']:.2f}", f"{factors['away_discipline']:.2f}", f"{factors['away_efficiency']:.2f}", f"{factors['away_momentum']:.2f}"]
-            }
-            st.dataframe(pd.DataFrame(factor_data), use_container_width=True, hide_index=True)
+            if st.button("📅 جلب المباريات القادمة", use_container_width=True):
+                upcoming = fetcher.fetch_upcoming_matches(league_id, selected_season)
+                if not upcoming.empty:
+                    st.session_state.upcoming = upcoming
+                    st.success(f"✅ تم جلب {len(upcoming)} مباراة قادمة")
+                else:
+                    st.warning("لا توجد مباريات قادمة حالياً")
+        else:
+            st.error("فشل الاتصال بالـ API. تأكد من المفتاح.")
 
-with tabs[1]:
-    st.markdown("## 📊 لوحة التحليلات")
-    df = st.session_state.df
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: st.markdown(f'<div class="metric-card"><div class="metric-value">{len(df):,}</div><div class="metric-label">إجمالي المباريات</div></div>', unsafe_allow_html=True)
-    with col2: st.markdown(f'<div class="metric-card"><div class="metric-value">{(df["home_goals"].sum() + df["away_goals"].sum()) / len(df):.2f}</div><div class="metric-label">متوسط الأهداف</div></div>', unsafe_allow_html=True)
-    with col3: st.markdown(f'<div class="metric-card"><div class="metric-value">{((df["home_goals"] > df["away_goals"]).sum() / len(df)) * 100:.1f}%</div><div class="metric-label">نسبة فوز الأرض</div></div>', unsafe_allow_html=True)
-    with col4: st.markdown(f'<div class="metric-card"><div class="metric-value">{((df["home_goals"] == df["away_goals"]).sum() / len(df)) * 100:.1f}%</div><div class="metric-label">نسبة التعادل</div></div>', unsafe_allow_html=True)
+# Main Tabs
+if 'data_loaded' in st.session_state and st.session_state.data_loaded:
+    tabs = st.tabs(["🔮 التنبؤ", "📊 التحليلات", "🤖 الأداء"])
     
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 📊 توزيع النتائج")
-        results_dist = pd.DataFrame({'النتيجة': ['فوز أصحاب الأرض', 'تعادل', 'فوز الضيف'], 'العدد': [(df['home_goals'] > df['away_goals']).sum(), (df['home_goals'] == df['away_goals']).sum(), (df['home_goals'] < df['away_goals']).sum()]})
-        fig = px.pie(results_dist, values='العدد', names='النتيجة', color_discrete_sequence=['#16a34a', '#ca8a04', '#dc2626'], hole=0.4)
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white', size=14))
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        st.markdown("### ⚽ توزيع الأهداف")
-        total_goals = df['home_goals'] + df['away_goals']
-        fig = px.histogram(x=total_goals, nbins=range(0, int(total_goals.max()) + 2), labels={'x': 'إجمالي الأهداف', 'y': 'المباريات'}, color_discrete_sequence=['#3b82f6'])
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white', size=14))
-        st.plotly_chart(fig, use_container_width=True)
-
-with tabs[2]:
-    st.markdown("## 🤖 أداء النماذج")
-    if st.session_state.training_results:
-        results = st.session_state.training_results
-        ensemble_acc = results['rf_accuracy'] * 0.30 + results['xgb_accuracy'] * 0.45 + results['lr_accuracy'] * 0.25
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: st.markdown(f'<div class="metric-card"><div class="metric-value" style="color: #16a34a;">{results["rf_accuracy"]:.1%}</div><div class="metric-label">Random Forest</div></div>', unsafe_allow_html=True)
-        with col2: st.markdown(f'<div class="metric-card"><div class="metric-value" style="color: #3b82f6;">{results["xgb_accuracy"]:.1%}</div><div class="metric-label">XGBoost</div></div>', unsafe_allow_html=True)
-        with col3: st.markdown(f'<div class="metric-card"><div class="metric-value" style="color: #ca8a04;">{results["lr_accuracy"]:.1%}</div><div class="metric-label">Logistic Regression</div></div>', unsafe_allow_html=True)
-        with col4: st.markdown(f'<div class="metric-card"><div class="metric-value" style="color: #a855f7;">{ensemble_acc:.1%}</div><div class="metric-label">Ensemble</div></div>', unsafe_allow_html=True)
+    with tabs[0]:
+        st.markdown("## 🔮 تنبؤ المباريات القادمة")
+        if 'upcoming' in st.session_state and not st.session_state.upcoming.empty:
+            upcoming = st.session_state.upcoming
+            match_options = [f"{row['home_team']} vs {row['away_team']} ({row['date'].date()})" for _, row in upcoming.iterrows()]
+            selected_match = st.selectbox("اختر المباراة", match_options)
+            
+            if st.button("🔮 تنبأ", type="primary"):
+                idx = match_options.index(selected_match)
+                row = upcoming.iloc[idx]
+                
+                with st.spinner("تحليل 8 عوامل..."):
+                    factors = st.session_state.analyzer.get_all_factors(row['home_team'], row['away_team'], datetime.now())
+                    temp_df = pd.DataFrame([{
+                        'home_team': row['home_team'],
+                        'away_team': row['away_team'],
+                        'date': datetime.now()
+                    }])
+                    X_pred = st.session_state.models.prepare_features(temp_df, st.session_state.analyzer, datetime.now())
+                    pred = st.session_state.models.predict(X_pred)
+                    
+                    st.markdown("---")
+                    c1, c2, c3 = st.columns([2,1,2])
+                    with c1:
+                        st.markdown(f"<h3 style='text-align:center;color:#3b82f6;'>{row['home_team']}</h3>", unsafe_allow_html=True)
+                    with c2:
+                        st.markdown("<h1 style='text-align:center;color:#f59e0b;'>VS</h1>", unsafe_allow_html=True)
+                    with c3:
+                        st.markdown(f"<h3 style='text-align:center;color:#ef4444;'>{row['away_team']}</h3>", unsafe_allow_html=True)
+                    
+                    probs = pred['probabilities']
+                    cols = st.columns(3)
+                    cols[0].metric(f"فوز {row['away_team']}", f"{probs['away_win']}%")
+                    cols[1].metric("تعادل", f"{probs['draw']}%")
+                    cols[2].metric(f"فوز {row['home_team']}", f"{probs['home_win']}%")
+                    
+                    st.success(f"🏆 التنبؤ النهائي: **{pred['ensemble_prediction']}** (ثقة {pred['confidence']}%)")
+                    
+                    # عرض العوامل
+                    st.markdown("### 📈 العوامل التحليلية")
+                    fact_df = pd.DataFrame({
+                        'العامل': ['Form', 'Offense', 'Defense', 'Home Adv.', 'H2H', 'Discipline', 'Efficiency', 'Momentum'],
+                        row['home_team']: [factors['home_form'], factors['home_offense'], factors['home_defense'], factors['home_advantage'], factors['h2h_home'], factors['home_discipline'], factors['home_efficiency'], factors['home_momentum']],
+                        row['away_team']: [factors['away_form'], factors['away_offense'], factors['away_defense'], factors['away_advantage'], factors['h2h_away'], factors['away_discipline'], factors['away_efficiency'], factors['away_momentum']]
+                    })
+                    st.dataframe(fact_df.style.format("{:.2f}"), use_container_width=True)
+        else:
+            st.info("اضغط على 'جلب المباريات القادمة' في القائمة الجانبية أولاً.")
+    
+    with tabs[1]:
+        df = st.session_state.df
+        st.markdown("## 📊 إحصائيات الدوري")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("المباريات", len(df))
+        avg_goals = (df['home_goals'].sum() + df['away_goals'].sum()) / len(df)
+        col2.metric("متوسط الأهداف", f"{avg_goals:.2f}")
+        home_win_rate = (df['home_goals'] > df['away_goals']).sum() / len(df) * 100
+        col3.metric("نسبة فوز الأرض", f"{home_win_rate:.1f}%")
         
-        st.markdown("---")
-        st.markdown("### 📊 مقارنة الدقة")
-        model_comparison = pd.DataFrame({'النموذج': ['Random Forest', 'XGBoost', 'Logistic Regression', 'Ensemble'], 'الدقة': [results['rf_accuracy'], results['xgb_accuracy'], results['lr_accuracy'], ensemble_acc]})
-        fig = px.bar(model_comparison, x='النموذج', y='الدقة', color='النموذج', color_discrete_sequence=['#16a34a', '#3b82f6', '#ca8a04', '#a855f7'], text='الدقة', text_auto='.1%')
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white', size=14), showlegend=False)
+        fig = px.histogram(df['home_goals'] + df['away_goals'], nbins=10, title="توزيع الأهداف")
         st.plotly_chart(fig, use_container_width=True)
-
-with tabs[3]:
-    st.markdown("## 📋 أهمية الميزات")
-    if st.session_state.models and st.session_state.models.is_trained:
-        importance = st.session_state.models.get_feature_importance()
-        importance_df = pd.DataFrame({'الميزة': list(importance.keys()), 'الأهمية': list(importance.values())}).sort_values('الأهمية', ascending=True)
-        fig = px.bar(importance_df, x='الأهمية', y='الميزة', orientation='h', color='الأهمية', color_continuous_scale='Blues')
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white', size=12), height=500)
-        st.plotly_chart(fig, use_container_width=True)
-
-with tabs[4]:
-    st.markdown("## 📚 الدليل")
-    st.markdown("""
-    ### 🎯 نظرة عامة
-    **ProBet** نظام تنبؤ متقدم باستخدام:
-    - **3 نماذج ML** (Random Forest, XGBoost, Logistic Regression)
-    - **8 عوامل تحليلية متطورة**
-    - **50+ دوري عالمي**
     
-    ### 📊 العوامل الثمانية
-    | # | العامل | الوصف |
-    |---|--------|-------|
-    | 1 | **الشكل** | آخر 5 نتائج |
-    | 2 | **القوة الهجومية** | الأهداف + xG |
-    | 3 | **القوة الدفاعية** | الأهداف المستقبلة |
-    | 4 | **ميزة الملعب** | النقاط داخل/خارج |
-    | 5 | **المواجهات** | آخر 10 مباريات |
-    | 6 | **الانضباط** | البطاقات |
-    | 7 | **كفاءة التسديد** | الأهداف/التسديدات |
-    | 8 | **الزخم** | اتجاه الأداء |
-    
-    ### ⚠️ تنبيه
-    للأغراض التحليلية والتعليمية فقط.
-    """)
+    with tabs[2]:
+        res = st.session_state.training_results
+        st.markdown("## 🤖 أداء النماذج (TimeSeriesSplit)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Random Forest", f"{res['rf_avg']:.1%}")
+        c2.metric("XGBoost", f"{res['xgb_avg']:.1%}")
+        c3.metric("Logistic Reg.", f"{res['lr_avg']:.1%}")
+        st.metric("الدقة النهائية (آخر 20%)", f"{res['final_accuracy']:.1%}")
+        st.caption("تم التقييم باستخدام TimeSeriesSplit لمنع التسرب الزمني (التنبؤ بالمستقبل).")
+
+else:
+    st.info("⏳ يرجى تحميل البيانات من القائمة الجانبية أولاً باستخدام مفتاح API الصحيح.")
