@@ -9,9 +9,10 @@ import os
 import plotly.express as px
 
 # Import from src folder directly
-from src.scrapers.data_fetcher import FootballDataFetcher
-from src.analysis.advanced_analyzer import AdvancedFootballAnalyzer
-from src.models.prediction_models import FootballPredictionModels
+from data_fetcher import FootballDataFetcher
+from advanced_analyzer import AdvancedFootballAnalyzer
+from prediction_models import FootballPredictionModels
+
 
 
 # Page config
