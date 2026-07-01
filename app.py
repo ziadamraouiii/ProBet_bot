@@ -13,6 +13,7 @@ from src.scrapers.data_fetcher import FootballDataFetcher
 from src.analysis.advanced_analyzer import AdvancedFootballAnalyzer
 from src.models.prediction_models import FootballPredictionModels
 
+
 # Page config
 st.set_page_config(
     page_title="ProBet - Football Predictor",
