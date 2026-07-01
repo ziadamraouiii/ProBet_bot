@@ -1,1 +1,0 @@
-Enterfrom src.scrapers.data_fetcher import FootballDataFetcher
