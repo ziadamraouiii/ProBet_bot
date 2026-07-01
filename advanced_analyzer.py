@@ -135,4 +135,130 @@ class AdvancedFootballAnalyzer:
         points = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in stats.form_last_5)
         max_points = len(stats.form_last_5) * 3
         return points / max_points if max_points > 0 else 0.5
+            # العامل 2: القوة الهجومية
+    def factor_2_offensive_strength(self, team: str, is_home: bool = True) -> float:
+        stats = self.team_stats.get(team)
+        if not stats or stats.matches_played == 0:
+            return 1.0
+            
+        avg_goals = stats.goals_scored / stats.matches_played
+        avg_xg = stats.xg_scored / stats.matches_played
+        
+        strength = (avg_goals * 0.4 + avg_xg * 0.6)
+        
+        if is_home:
+            home_matches = stats.home_wins + stats.home_draws + stats.home_losses
+            if home_matches > 0:
+                home_goals = self.df[
+                    (self.df['home_team'] == team)
+                ]['home_goals'].sum()
+                strength = (home_goals / home_matches) * 0.7 + strength * 0.3
+        else:
+            away_matches = stats.away_wins + stats.away_draws + stats.away_losses
+            if away_matches > 0:
+                away_goals = self.df[
+                    (self.df['away_team'] == team)
+                ]['away_goals'].sum()
+                strength = (away_goals / away_matches) * 0.7 + strength * 0.3
+        
+        return max(0.1, strength)
+    
+    # العامل 3: القوة الدفاعية
+    def factor_3_defensive_strength(self, team: str, is_home: bool = True) -> float:
+        stats = self.team_stats.get(team)
+        if not stats or stats.matches_played == 0:
+            return 1.0
+            
+        avg_conceded = stats.goals_conceded / stats.matches_played
+        avg_xg_conceded = stats.xg_conceded / stats.matches_played
+        
+        combined = avg_conceded * 0.4 + avg_xg_conceded * 0.6
+        
+        if is_home:
+            home_matches = stats.home_wins + stats.home_draws + stats.home_losses
+            if home_matches > 0:
+                home_conceded = self.df[
+                    (self.df['home_team'] == team)
+                ]['away_goals'].sum()
+                combined = (home_conceded / home_matches) * 0.7 + combined * 0.3
+        else:
+            away_matches = stats.away_wins + stats.away_draws + stats.away_losses
+            if away_matches > 0:
+                away_conceded = self.df[
+                    (self.df['away_team'] == team)
+                ]['home_goals'].sum()
+                combined = (away_conceded / away_matches) * 0.7 + combined * 0.3
+        
+        strength = 1 / (1 + combined)
+        return max(0.1, strength)
+    
+    # العامل 4: الأداء في الملعب
+    def factor_4_home_away_advantage(self, team: str, is_home: bool = True) -> float:
+        stats = self.team_stats.get(team)
+        if not stats:
+            return 1.0 if is_home else 0.8
+            
+        if is_home:
+            total_home = stats.home_wins + stats.home_draws + stats.home_losses
+            if total_home == 0:
+                return 1.0
+            home_points = stats.home_wins * 3 + stats.home_draws
+            max_points = total_home * 3
+            return home_points / max_points if max_points > 0 else 0.5
+        else:
+            total_away = stats.away_wins + stats.away_draws + stats.away_losses
+            if total_away == 0:
+                return 0.8
+            away_points = stats.away_wins * 3 + stats.away_draws
+            max_points = total_away * 3
+            return away_points / max_points if max_points > 0 else 0.5
+    
+    # العامل 5: تاريخ المواجهات المباشرة
+    def factor_5_head_to_head(self, home_team: str, away_team: str) -> Dict[str, float]:
+        h2h = self.df[
+            ((self.df['home_team'] == home_team) & (self.df['away_team'] == away_team)) |
+            ((self.df['home_team'] == away_team) & (self.df['away_team'] == home_team))
+        ].sort_values('date')
+        
+        if len(h2h) == 0:
+            return {'home_advantage': 0.5, 'draw_tendency': 0.33}
+        
+        home_wins = 0
+        away_wins = 0
+        draws = 0
+        
+        for _, match in h2h.tail(10).iterrows():
+            if match['home_team'] == home_team:
+                if match['home_goals'] > match['away_goals']:
+                    home_wins += 1
+                elif match['home_goals'] < match['away_goals']:
+                    away_wins += 1
+                else:
+                    draws += 1
+            else:
+                if match['away_goals'] > match['home_goals']:
+                    home_wins += 1
+                elif match['away_goals'] < match['home_goals']:
+                    away_wins += 1
+                else:
+                    draws += 1
+        
+        total = home_wins + away_wins + draws
+        if total == 0:
+            return {'home_advantage': 0.5, 'draw_tendency': 0.33}
+        
+        return {
+            'home_advantage': home_wins / total,
+            'away_advantage': away_wins / total,
+            'draw_tendency': draws / total
+        }
+    
+    # العامل 6: إحصائيات اللعب النظيف
+    def factor_6_discipline(self, team: str) -> float:
+        team_matches = self.df[
+            (self.df['home_team'] == team) | (self.df['away_team'] == team)
+        ]
+        
+        if len(team_matches) == 0:
+
     
