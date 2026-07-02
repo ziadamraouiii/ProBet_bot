@@ -1,5 +1,5 @@
 """
-ProBet - مخصص لملفاتك (مع دعم scores.csv)
+ProBet - التنبؤ بنتائج المباريات (يدعم full_time_home/away)
 """
 
 import streamlit as st
@@ -16,11 +16,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ═══════════════════════════════════════════════════════
-# PART 1: تحميل ودمج الملفات (مخصص)
+# PART 1: تحميل ودمج الملفات (مع دعم full_time_home/away)
 # ═══════════════════════════════════════════════════════
 
 def load_and_merge_files(uploaded_files) -> pd.DataFrame:
-    """تحميل الملفات ودمجها مع معرفة دقيقة بأسماء الأعمدة"""
+    """تحميل الملفات ودمجها مع دعم أعمدة full_time_home و full_time_away"""
     dfs = {}
     
     for file in uploaded_files:
@@ -61,7 +61,6 @@ def load_and_merge_files(uploaded_files) -> pd.DataFrame:
     # 3. ربط أسماء الفرق من teams.csv
     if 'teams.csv' in dfs:
         teams = dfs['teams.csv']
-        # تحديد أعمدة المعرف والاسم
         id_col = None
         name_col = None
         for col in teams.columns:
@@ -72,48 +71,51 @@ def load_and_merge_files(uploaded_files) -> pd.DataFrame:
                 name_col = col
         
         if id_col and name_col:
-            # ربط الفريق المضيف
             matches = matches.merge(teams[[id_col, name_col]], left_on='home_team_id', right_on=id_col, how='left')
             matches = matches.rename(columns={name_col: 'home_team'})
             matches = matches.drop(columns=[id_col])
             
-            # ربط الفريق الضيف
             matches = matches.merge(teams[[id_col, name_col]], left_on='away_team_id', right_on=id_col, how='left')
             matches = matches.rename(columns={name_col: 'away_team'})
             matches = matches.drop(columns=[id_col])
             
             st.success("✅ تم ربط أسماء الفرق من teams.csv")
         else:
-            st.warning(f"⚠️ لم يتم العثور على أعمدة ID/Name في teams.csv. الأعمدة الموجودة: {list(teams.columns)}")
+            st.warning(f"⚠️ لم يتم العثور على أعمدة ID/Name في teams.csv")
     else:
         st.warning("⚠️ لم يتم رفع teams.csv، سيتم استخدام المعرفات كأسماء")
         matches['home_team'] = matches['home_team_id'].astype(str)
         matches['away_team'] = matches['away_team_id'].astype(str)
     
-    # 4. محاولة جلب الأهداف من scores.csv
+    # 4. جلب الأهداف من scores.csv (مع دعم full_time_home/away)
     if 'scores.csv' in dfs:
         scores = dfs['scores.csv']
         st.info(f"📄 scores.csv الأعمدة: {list(scores.columns)}")
         
-        # البحث عن أعمدة الأهداف
         home_goal_col = None
         away_goal_col = None
+        
+        # قائمة الكلمات المفتاحية للبحث (مرتبة حسب الأفضلية)
+        home_keywords = ['full_time_home', 'ft_home', 'home_goals', 'hgoal', 'home_score', 'goals_home', 'score_home']
+        away_keywords = ['full_time_away', 'ft_away', 'away_goals', 'agoal', 'away_score', 'goals_away', 'score_away']
+        
         for col in scores.columns:
             col_low = col.lower().strip()
-            if 'home' in col_low and ('goal' in col_low or 'score' in col_low):
-                home_goal_col = col
-            if 'away' in col_low and ('goal' in col_low or 'score' in col_low):
-                away_goal_col = col
+            for kw in home_keywords:
+                if kw in col_low:
+                    home_goal_col = col
+                    break
+            if home_goal_col:
+                break
         
-        # إذا لم نجد، نحاول أعمدة شائعة أخرى
-        if home_goal_col is None:
-            for col in ['home_goals', 'hgoal', 'home_score', 'goals_home']:
-                if col in scores.columns:
-                    home_goal_col = col; break
-        if away_goal_col is None:
-            for col in ['away_goals', 'agoal', 'away_score', 'goals_away']:
-                if col in scores.columns:
-                    away_goal_col = col; break
+        for col in scores.columns:
+            col_low = col.lower().strip()
+            for kw in away_keywords:
+                if kw in col_low:
+                    away_goal_col = col
+                    break
+            if away_goal_col:
+                break
         
         if home_goal_col and away_goal_col:
             # ربط باستخدام match_id
@@ -127,19 +129,18 @@ def load_and_merge_files(uploaded_files) -> pd.DataFrame:
                 scores_subset = scores[[match_id_col, home_goal_col, away_goal_col]]
                 matches = matches.merge(scores_subset, on=match_id_col, how='left')
                 matches = matches.rename(columns={home_goal_col: 'home_goals', away_goal_col: 'away_goals'})
-                st.success(f"✅ تم ربط الأهداف من scores.csv (أعمدة: {home_goal_col}, {away_goal_col})")
+                st.success(f"✅ تم ربط الأهداف الحقيقية من scores.csv (أعمدة: {home_goal_col}, {away_goal_col})")
             else:
                 st.warning("⚠️ لا يوجد عمود match_id مشترك للربط مع scores.csv")
         else:
-            st.warning(f"⚠️ لم يتم العثور على أعمدة الأهداف في scores.csv. الأعمدة: {list(scores.columns)}")
+            st.warning(f"⚠️ لم يتم العثور على أعمدة الأهداف في scores.csv. الأعمدة الموجودة: {list(scores.columns)}")
     else:
-        st.warning("⚠️ لم يتم رفع scores.csv، سيتم محاولة استنتاج النتائج من عمود winner")
+        st.warning("⚠️ لم يتم رفع scores.csv")
     
-    # 5. إذا لم توجد أعمدة الأهداف، نحاول استخدام عمود winner
+    # 5. إذا لم توجد أعمدة الأهداف، نستخدم عمود winner كحل احتياطي
     if 'home_goals' not in matches.columns or 'away_goals' not in matches.columns:
         if 'winner' in matches.columns:
-            st.info("ℹ️ باستخدام عمود winner لتحديد الفائز (بدون أعداد)")
-            # إنشاء أهداف وهمية للتدريب (فوز = 2-1، تعادل = 1-1، خسارة = 0-1)
+            st.info("ℹ️ باستخدام عمود winner لتحديد الفائز (توليد أهداف وهمية للتدريب)")
             matches['home_goals'] = 0
             matches['away_goals'] = 0
             for idx, row in matches.iterrows():
@@ -176,7 +177,7 @@ def load_and_merge_files(uploaded_files) -> pd.DataFrame:
     return matches
 
 # ═══════════════════════════════════════════════════════
-# PART 2: المحلل والنماذج (نفس الكود السابق)
+# PART 2: المحلل والنماذج
 # ═══════════════════════════════════════════════════════
 
 class AdvancedAnalyzer:
@@ -303,7 +304,7 @@ class ModelTrainer:
 # PART 3: واجهة Streamlit
 # ═══════════════════════════════════════════════════════
 
-st.set_page_config(page_title="ProBet - مخصص", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="ProBet - النهائي", page_icon="⚽", layout="wide")
 
 st.markdown("""
 <style>
@@ -311,7 +312,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">⚽ ProBet - التنبؤ (مخصص لملفاتك)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">⚽ ProBet - التنبؤ (النسخة النهائية)</div>', unsafe_allow_html=True)
 
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
@@ -403,6 +404,6 @@ else:
     ### 📋 التعليمات:
     1. ارفع جميع الملفات (matches.csv, teams.csv, scores.csv, ...)
     2. اضغط على 'تحميل ودمج الكل'
-    3. التطبيق سيتعرف على الأعمدة تلقائياً
+    3. التطبيق سيتعرف على `full_time_home` و `full_time_away` تلقائياً
     4. اختر فريقين واضغط 'تنبأ'
     """)
